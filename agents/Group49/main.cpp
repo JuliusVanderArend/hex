@@ -7,7 +7,7 @@ using namespace engine;
 
 int main() {
     FastRand rng;
-    Position pos(0); // Start empty
+    Position pos(0);
 
     long long totalMoves = 0;
     int redWins = 0;
@@ -16,7 +16,6 @@ int main() {
 
     auto start = std::chrono::high_resolution_clock::now();
 
-    // Run 10 million games
     int iterations = 1000000;
 
     for (int i = 0; i < iterations; ++i) {
@@ -24,15 +23,13 @@ int main() {
 
         // Loop until game ends
         while (workingPos.getWinner() == -1) {
-            workingPos.makeRandomRolloutMove(rng); // Pass RNG if removed from class
+            workingPos.makeRandomRolloutMove(rng);
         }
 
-        // 1. ACCUMULATE STATS (Prevents Dead Code Elimination)
         if (workingPos.getWinner() == 0) redWins++;
         else if (workingPos.getWinner() == 1) blueWins++;
         else nowin++;
 
-        // 2. TRACK MOVES (Detects Instant-Win Bug)
         totalMoves += workingPos.moveCount;
     }
 
@@ -42,17 +39,13 @@ int main() {
     std::cout << "Time taken: " << duration.count() << " ms" << std::endl;
     std::cout << "Games/Sec:  " << (iterations * 1000LL) / duration.count() << std::endl;
 
-    // CRITICAL DIAGNOSTICS
+    // DIAGNOSTICS
     double avgMoves = (double)totalMoves / iterations;
     std::cout << "Average Moves per Game: " << avgMoves << std::endl;
     std::cout << "Red Win Rate: " << (double)redWins / iterations << std::endl;
 
     std::cout << "nowin Rate: " << (double)nowin / iterations << std::endl;
 
-    // Sanity Check Assertions
-    if (avgMoves < 20.0) {
-        std::cout << "WARNING: Games are ending too fast! Check isWon() logic." << std::endl;
-    }
 
     return 0;
 }
