@@ -15,12 +15,34 @@ namespace engine {
     {
         boards[0] = 0;
         boards[1] = 0;
+        occupancy = 0;
+        dsus[0].reset();
+        dsus[1].reset();
     }
     void Position::makeMove(Move move) {
-        setHex(sideToMove==0? move: transposeMove(move),&boards[sideToMove]);
+        Move canonicalMove = sideToMove==0? move: transposeMove(move);
+        setHex(canonicalMove,&boards[sideToMove]);
+        if (canonicalMove < BOARD_SIZE) {
+            dsus[sideToMove].unite(canonicalMove,V_START); // should unite with absolute or cannonical move???
+        }
+        else if (canonicalMove >= BOARD_AREA - BOARD_SIZE) { // >= is correct????
+            dsus[sideToMove].unite(canonicalMove,V_END);
+        }
         setHex(move,&occupancy);
+
+        const auto& myNeighbors = NEIGHBOR_LUT[canonicalMove];
+
+        for (int i = 0; i < 6; ++i) {
+            int n_idx = myNeighbors[i];
+            if (n_idx != -1) {
+                // Check bitboard: Is this neighbor occupied by us?
+                if ((boards[sideToMove] >> n_idx) & 1) {
+                    dsus[sideToMove].unite(canonicalMove, n_idx);
+                }
+            }
+        }
         sideToMove ^= 1;
-        moveCount++;
+        moveCount++; //needed ?
     }
 
     void Position::unmakeMove(Move move) {
@@ -30,22 +52,21 @@ namespace engine {
         moveCount--;
     }
 
-    Move Position::getRandomLegalMove(FastRand& rng) {
+    Move Position::getRandomLegalMove(FastRand& rng) const{
         Board legal_mask = (~occupancy) & BOARD_MASK; //CHECK needed board mask? ie. can occupany ever have last 7 bits high???
 
-        // PDEP only works on 64-bit registers, so must handle lo/hi separately
+        // split upper and lower board so it works with 64 bit PDEP
         uint64_t mask_lo = (uint64_t)legal_mask;
         uint64_t mask_hi = (uint64_t)(legal_mask >> 64);
 
-        // Count available moves (Popcount)
+        // Count available moves
         int pop_lo = __builtin_popcountll(mask_lo);
         int pop_hi = __builtin_popcountll(mask_hi);
         int total_moves = pop_lo + pop_hi;
 
         if (total_moves == 0) return -1;
 
-        // Pick a random "Rank"
-        // If there are 5 moves, we pick a number 0..4
+        // Pick a random move from avaliable moves remaining
         int rank = rng.range(total_moves);
 
         if (rank < pop_lo) {
@@ -53,7 +74,7 @@ namespace engine {
             uint64_t sparse_selector = 1ULL << rank;
             uint64_t result = _pdep_u64(sparse_selector, mask_lo);
 
-            // Find the index of that bit (Count Trailing Zeros)
+            // Find the index of move
             return __builtin_ctzll(result);
 
         } else {
@@ -61,85 +82,112 @@ namespace engine {
             rank -= pop_lo;
             uint64_t sparse_selector = 1ULL << rank;
             uint64_t result = _pdep_u64(sparse_selector, mask_hi);
-            // Find index and ADD 64 because we are in the upper half
             return 64 + __builtin_ctzll(result);
         }
     }
 
     void Position::makeRandomRolloutMove(FastRand& rng) {
-        Move randomMove = getRandomLegalMove(rng);
-        makeMove(randomMove);
+        Move legalMove = getRandomLegalMove(rng);
+        makeMove(legalMove);
     }
 
-    int Position::getWinner() {
-        if (moveCount == BOARD_AREA) {
-            return 2;
-        }
-        return isWon(&boards[0])? 0: (isWon(&boards[1])? 1: -1);
+    // void Position::makeRandomRolloutMove(FastRand& rng) {
+    //     Board legal_mask = (~occupancy) & BOARD_MASK;
+    //
+    //     uint64_t mask_lo = (uint64_t)legal_mask;
+    //     uint64_t mask_hi = (uint64_t)(legal_mask >> 64);
+    //
+    //     int pop_lo = __builtin_popcountll(mask_lo);
+    //     int pop_hi = __builtin_popcountll(mask_hi);
+    //     int total_moves = pop_lo + pop_hi;
+    //
+    //     if (total_moves == 0) return;
+    //
+    //     int rank = rng.range(total_moves);
+    //     Move move;
+    //
+    //     if (rank < pop_lo) {
+    //         uint64_t sparse_selector = 1ULL << rank;
+    //         uint64_t result = _pdep_u64(sparse_selector, mask_lo);
+    //         move = __builtin_ctzll(result);
+    //         occupancy |= (Board)result;
+    //     } else {
+    //         rank -= pop_lo;
+    //         uint64_t sparse_selector = 1ULL << rank;
+    //         uint64_t result = _pdep_u64(sparse_selector, mask_hi);
+    //         move = 64 + __builtin_ctzll(result);
+    //         occupancy |= ((Board)result) << 64;
+    //     }
+    //
+    //     Move canonicalMove = sideToMove==0? move: transposeMove(move);
+    //
+    //     boards[sideToMove] |= ((Board)1 << canonicalMove);
+    //     if (canonicalMove < BOARD_SIZE) {
+    //         dsus[sideToMove].unite(canonicalMove, V_START);
+    //     }
+    //     else if (canonicalMove >= BOARD_AREA - BOARD_SIZE) {
+    //         dsus[sideToMove].unite(canonicalMove, V_END);
+    //     }
+    //
+    //     const auto& myNeighbors = NEIGHBOR_LUT[canonicalMove];
+    //     const Board& myBoard = boards[sideToMove];
+    //
+    //     for (int i = 0; i < 6; ++i) {
+    //         int n_idx = myNeighbors[i];
+    //         if (n_idx != 0xFF) {
+    //             if ((myBoard >> n_idx) & 1) {
+    //                 dsus[sideToMove].unite(canonicalMove, n_idx);
+    //             }
+    //         }
+    //     }
+    //     sideToMove ^= 1;
+    //     moveCount++;
+    // }
+
+    int Position::getWinner() const {
+        // Check Red (0)
+        if (dsus[0].isConnected(V_START, V_END)) return 0;
+
+        // Check Blue (1)
+        if (dsus[1].isConnected(V_START, V_END)) return 1;
+
+        // Draw / Ongoing
+        if (moveCount == BOARD_AREA) return 2; // Should technically never happen in Hex if logic is perfect
+        return -1;
     }
 
-bool Position::isWon(Board* board) {
-    // 1. Start with stones in the Top Row
-    Board wavefront = *board & ROW_MASK;
-    if (wavefront == 0) return false;
-
-    // Masks to prevent wrapping
-    // COL_A: 0, 11, 22...
-    constexpr Board NOT_COL_A = ~COL_MASK;
-
-    // We also need masks for "Up-Right" and "Down-Left"
-    // because they shift across columns.
-
-    Board activeStones = *board;
-    Board oldWavefront = 0;
-
-    // 2. Propagate Until Stable (Fixed Point)
-    while (true) {
-        oldWavefront = wavefront;
-
-        // --- EXPAND IN ALL 6 DIRECTIONS ---
-
-        // 1. Vertical
-        Board down = (wavefront << BOARD_SIZE);
-        Board up   = (wavefront >> BOARD_SIZE);
-
-        // 2. Slanted (The tricky ones)
-        // Down-Left: +10 (Needs NOT_COL_A)
-        Board down_left = (wavefront & NOT_COL_A) << (BOARD_SIZE - 1);
-
-        // Up-Right: -10 (The reverse of Down-Left).
-        // When going UP, we are shifting Right relative to the array.
-        // We need to ensure we don't wrap from Right Edge (Col K) to Left Edge (Col A).
-        // Actually, -10 shifts bit 11 (A1) to 1 (A0). Wait.
-        // Index i -> i-10.
-        // If i=10 (K0), i-10=0 (A0). This wraps K->A.
-        // So we need NOT_COL_A mask on the RESULT or NOT_COL_K on the SOURCE?
-        // Let's invert: Down-Left shifts A -> K (bad).
-        // Up-Right shifts K -> A (bad). So Up-Right needs NOT_COL_A mask on the DESTINATION
-        // or NOT_COL_K mask on the SOURCE.
-        // Simplest: Mask COL_A before shifting down-left. Mask COL_K before shifting up-right.
-        constexpr Board NOT_COL_K = ~(COL_MASK << (BOARD_SIZE - 1));
-        Board up_right = (wavefront & NOT_COL_K) >> (BOARD_SIZE - 1);
-
-        // 3. Horizontal
-        // Right: +1 (Mask COL_K)
-        Board right = (wavefront & NOT_COL_K) << 1;
-        // Left:  -1 (Mask COL_A)
-        Board left  = (wavefront & NOT_COL_A) >> 1;
-
-        // Combine all directions
-        Board expansion = down | up | down_left | up_right | right | left;
-
-        // Mask with stones on board
-        wavefront |= (expansion & activeStones);
-
-        // Check for convergence
-        if (wavefront == oldWavefront) break;
-    }
-
-    // 3. Check Bottom Row
-    return (wavefront & BOTTOM_ROW_MASK) != 0;
-}
+// bool Position::isWon(Board* board) {
+//     Board wavefront = *board & ROW_MASK;
+//     if (wavefront == 0) return false;
+//
+//     constexpr Board NOT_COL_A = ~COL_MASK;
+//
+//     Board activeStones = *board;
+//     Board oldWavefront = 0;
+//
+//     while (true) {
+//         oldWavefront = wavefront;
+//
+//         Board down = (wavefront << BOARD_SIZE);
+//         Board up   = (wavefront >> BOARD_SIZE);
+//
+//         Board down_left = (wavefront & NOT_COL_A) << (BOARD_SIZE - 1);
+//
+//         constexpr Board NOT_COL_K = ~(COL_MASK << (BOARD_SIZE - 1));
+//         Board up_right = (wavefront & NOT_COL_K) >> (BOARD_SIZE - 1);
+//
+//
+//         Board right = (wavefront & NOT_COL_K) << 1;
+//         Board left  = (wavefront & NOT_COL_A) >> 1;
+//
+//         Board expansion = down | up | down_left | up_right | right | left;
+//
+//         wavefront |= (expansion & activeStones);
+//         if (wavefront == oldWavefront) break;
+//     }
+//
+//     return (wavefront & BOTTOM_ROW_MASK) != 0;
+// }
 
     void Position::printBitboard(Board board) const {
         std::cout << "   Raw Bitboard View:" << std::endl;

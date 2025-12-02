@@ -12,6 +12,7 @@ int main() {
     long long totalMoves = 0;
     int redWins = 0;
     int blueWins = 0;
+    int nowin = 0;
 
     auto start = std::chrono::high_resolution_clock::now();
 
@@ -28,7 +29,8 @@ int main() {
 
         // 1. ACCUMULATE STATS (Prevents Dead Code Elimination)
         if (workingPos.getWinner() == 0) redWins++;
-        else blueWins++;
+        else if (workingPos.getWinner() == 1) blueWins++;
+        else nowin++;
 
         // 2. TRACK MOVES (Detects Instant-Win Bug)
         totalMoves += workingPos.moveCount;
@@ -44,6 +46,8 @@ int main() {
     double avgMoves = (double)totalMoves / iterations;
     std::cout << "Average Moves per Game: " << avgMoves << std::endl;
     std::cout << "Red Win Rate: " << (double)redWins / iterations << std::endl;
+
+    std::cout << "nowin Rate: " << (double)nowin / iterations << std::endl;
 
     // Sanity Check Assertions
     if (avgMoves < 20.0) {

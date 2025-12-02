@@ -8,12 +8,15 @@
 #include <cstdint>
 namespace engine {
     using Board = unsigned __int128;
-    using Move = int;//uint_fast8_t;
+    using Move = uint_fast8_t;
 
     // 1. Basic Dimensions
     constexpr int BOARD_SIZE = 11;
     constexpr int BOARD_AREA = BOARD_SIZE * BOARD_SIZE; // 121
     constexpr int MAX_MOVES  = BOARD_AREA;
+
+    constexpr Move V_START = 121; // Top (Red) / Left (Blue)
+    constexpr Move V_END   = 122; // Bottom (Red) / Right (Blue)
 
     // 2. Board Mask (Valid bits 0 to 120)
     // Math: 2^121 - 1
@@ -37,18 +40,55 @@ namespace engine {
     // 6. Not Column A Mask (Used to prevent wrap-around on Down-Left shift)
     constexpr Board NOT_COL_MASK = ~COL_MASK;
 
-    constexpr std::array<uint8_t, BOARD_AREA> create_transpose_table() {
-        std::array<uint8_t, BOARD_AREA> table{};
+    constexpr std::array<Move, BOARD_AREA> create_transpose_table() {
+        std::array<Move, BOARD_AREA> table{};
         for (int i = 0; i < BOARD_AREA; ++i) {
             int row = i / BOARD_SIZE;
             int col = i % BOARD_SIZE;
             // The logic you wrote:
-            table[i] = static_cast<uint8_t>(col * BOARD_SIZE + row);
+            table[i] = static_cast<Move>(col * BOARD_SIZE + row);
         }
         return table;
     }
 
     constexpr auto TRANSPOSE_LUT = create_transpose_table();
+
+    using NeighborList = std::array<Move, 6>;
+
+    constexpr std::array<NeighborList, BOARD_AREA> create_neighbor_table() {
+        std::array<NeighborList, BOARD_AREA> table{}; // Zero initialize
+
+        // The 6 directions in (row, col) offsets for a skewed Hex grid
+        // 1. Top       (r-1, c)
+        // 2. Top-Right (r-1, c+1)
+        // 3. Left      (r, c-1)
+        // 4. Right     (r, c+1)
+        // 5. Bot-Left  (r+1, c-1)
+        // 6. Bot       (r+1, c)
+        constexpr int dr[6] = {-1, -1,  0, 0,  1, 1};
+        constexpr int dc[6] = { 0,  1, -1, 1, -1, 0};
+
+        for (int i = 0; i < BOARD_AREA; ++i) {
+            int r = i / BOARD_SIZE;
+            int c = i % BOARD_SIZE;
+
+            for (int k = 0; k < 6; ++k) {
+                int nr = r + dr[k];
+                int nc = c + dc[k];
+
+                // Check boundaries
+                if (nr >= 0 && nr < BOARD_SIZE && nc >= 0 && nc < BOARD_SIZE) {
+                    table[i][k] = static_cast<Move>(nr * BOARD_SIZE + nc);
+                } else {
+                    table[i][k] = 0xFF; // Sentinel for "No Neighbor" (Off board)
+                }
+            }
+        }
+        return table;
+    }
+
+    // The compile-time constant
+    constexpr auto NEIGHBOR_LUT = create_neighbor_table();
 
     static inline int transposeMove(int move) {
         return TRANSPOSE_LUT[move];
