@@ -189,3 +189,56 @@ TEST(WinCheck, UTurnPath_Red) {
 
     EXPECT_RED_WIN(pos);
 }
+
+TEST(WinCheck, BrokenBucketPath_NoWin) {
+    FastRand rng;
+    Position pos(0);
+
+    /* * SCENARIO: The "Broken Apex"
+     * Red builds a U-shape that goes DOWN Col 0, UP Col 2,
+     * and tries to connect to a separate group going DOWN Col 4.
+     * * The connection depends on a single stone at the apex (top of the curve).
+     * We purposefully OMIT that stone.
+     */
+
+    // 1. LEFT TOWER (Connected to Top)
+    // Path: (0,0) down to (5,0), then U-Turn up to (4,2)
+    std::vector<int> leftTower = {
+        // Down Column 0 (Connected to Top)
+        0*11+0, 1*11+0, 2*11+0, 3*11+0, 4*11+0, 5*11+0,
+
+        // The "Bottom" of the bucket (Move Right)
+        5*11+1,
+
+        // The "Right Side" of the bucket (Move UP)
+        5*11+2, 4*11+2
+    };
+
+    // 2. RIGHT TOWER (Connected to Bottom)
+    // Path: Starts at (4,4) and goes down to (10,4)
+    std::vector<int> rightTower = {
+        4*11+4, // Apex of right tower
+        5*11+4, 6*11+4, 7*11+4, 8*11+4, 9*11+4, 10*11+4
+    };
+
+    // 3. APPLY MOVES
+    for (int move : leftTower) {
+        pos.makeMove(move);
+        pos.makeMove(move + 50); // Dummy blue move to avoid self-play error
+    }
+    for (int move : rightTower) {
+        pos.makeMove(move);
+        pos.makeMove(move + 50); // Dummy blue move
+    }
+
+    // 4. THE GAP ANALYSIS
+    // Left Tower ends at (4,2).
+    // Right Tower starts at (4,4).
+    // The "Keystone" would be (3,3) or (4,3).
+    // We check that NO WIN is detected without these stones.
+
+    // Uncomment to see the gap visually:
+    // pos.printPosition();
+
+    EXPECT_NO_WINNER(pos);
+}
