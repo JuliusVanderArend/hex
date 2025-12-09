@@ -16,6 +16,15 @@ add_executable(Group49 main.cpp
         src/MCTS.cpp
         src/MCTS.h)
 
+add_executable(Group49SelfPlay self_play.cpp
+        src/Util.cpp
+        src/Util.h
+        src/Position.cpp
+        src/Position.h
+        src/Node.cpp
+        src/MCTS.cpp
+        src/MCTS.h)
+
 # 1. Fetch GoogleTest
 include(FetchContent)
 FetchContent_Declare(

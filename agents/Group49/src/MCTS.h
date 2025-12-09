@@ -9,6 +9,7 @@
 #include <cmath>
 #include <limits>
 #include <algorithm>
+#include <array>
 #include <iostream>
 #include "../src/Position.h"
 namespace engine {
@@ -49,6 +50,11 @@ namespace engine {
         }
     };
 
+struct SearchResult {
+    int bestMove = -1;
+    std::array<double, BOARD_AREA> policy{};
+};
+
 class MCTS {
 public:
     // Parameters
@@ -63,6 +69,10 @@ public:
     // MAIN SEARCH FUNCTION
     // ------------------------------------------------------------------------
     int search(const Position& rootPos, int iterations) {
+        return searchWithPolicy(rootPos, iterations).bestMove;
+    }
+
+    SearchResult searchWithPolicy(const Position& rootPos, int iterations) {
         // 1. Root Node Creation
         // The root represents the state *before* we make a move.
         // So 'player_just_moved' is the opponent of sideToMove.
@@ -90,28 +100,30 @@ public:
             backpropagate(leaf, winner);
         }
 
-        // 4. Select Robust Child (Max Visits)
-        // Max Visits is preferred over Max Score in MCTS literature.
-        int bestMove = -1;
+        // 4. Select Robust Child (Max Visits) and capture visit distribution
+        SearchResult result;
+        result.policy.fill(0.0);
+        double totalVisits = 0.0;
         int maxVisits = -1;
 
-        // Debug output (optional)
-        // std::cout << "Root Visits: " << root->visits << std::endl;
-
         for (Node* child : root->children) {
-            // Optional: Print stats for debugging
-            // std::cout << "Move " << child->move_idx
-            //           << ": " << child->visits << " visits, "
-            //           << (child->score / child->visits) << " winrate" << std::endl;
+            result.policy[child->move_idx] = static_cast<double>(child->visits);
+            totalVisits += child->visits;
 
             if (child->visits > maxVisits) {
                 maxVisits = child->visits;
-                bestMove = child->move_idx;
+                result.bestMove = child->move_idx;
+            }
+        }
+
+        if (totalVisits > 0.0) {
+            for (double& value : result.policy) {
+                value /= totalVisits;
             }
         }
 
         delete root; // Clean up the entire tree
-        return bestMove;
+        return result;
     }
 
 private:

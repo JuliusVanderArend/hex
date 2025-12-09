@@ -391,4 +391,12 @@ void Position::makeRandomRolloutMove(FastRand& rng) {
         std::cout << "ourmove? " << (sideToMove == 0);
         std::cout << "---------------------" << std::endl;
     }
+
+    bool Position::hasStone(int player, Move move) const {
+        if (player == 0) {
+            return hasBit(boards[0], move);
+        }
+        Move transposed = transposeMove(move);
+        return hasBit(boards[1], transposed);
+    }
 } // engine
