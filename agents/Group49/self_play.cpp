@@ -28,23 +28,27 @@ std::array<uint8_t, BOARD_AREA> buildPlane(const Position& pos, int player) {
     return plane;
 }
 
-std::string planeToString(const std::array<uint8_t, BOARD_AREA>& plane) {
-    std::string serialized;
-    serialized.reserve(BOARD_AREA);
-    for (uint8_t value : plane) {
-        serialized.push_back(value ? '1' : '0');
+std::string planeToJson(const std::array<uint8_t, BOARD_AREA>& plane) {
+    std::ostringstream oss;
+    oss << '[';
+    for (int i = 0; i < BOARD_AREA; ++i) {
+        if (i != 0) oss << ',';
+        oss << static_cast<int>(plane[i]);
     }
-    return serialized;
+    oss << ']';
+    return oss.str();
 }
 
-std::string policyToString(const std::array<double, BOARD_AREA>& policy) {
+std::string policyToJson(const std::array<double, BOARD_AREA>& policy) {
     std::ostringstream oss;
     oss.setf(std::ios::fixed);
+    oss << '[';
     oss << std::setprecision(6);
     for (int i = 0; i < BOARD_AREA; ++i) {
-        if (i != 0) oss << ' ';
+        if (i != 0) oss << ',';
         oss << policy[i];
     }
+    oss << ']';
     return oss.str();
 }
 
@@ -87,7 +91,7 @@ GameSamples playSelfPlayGame(MCTS& agent, int iterations) {
 int main(int argc, char** argv) {
     int games = 1;
     int iterations = 10000;
-    std::string outputPath = "selfplay_data.csv";
+    std::string outputPath = "selfplay_data.jsonl";
 
     if (argc > 1) games = std::stoi(argv[1]);
     if (argc > 2) iterations = std::stoi(argv[2]);
@@ -98,8 +102,6 @@ int main(int argc, char** argv) {
         std::cerr << "Unable to open output file: " << outputPath << std::endl;
         return 1;
     }
-
-    out << "game,move,player,value,red,blue,policy\n";
 
     MCTS agent;
     for (int gameIdx = 0; gameIdx < games; ++gameIdx) {
@@ -112,9 +114,15 @@ int main(int argc, char** argv) {
                 value = (record.winner == sample.playerToMove) ? 1 : -1;
             }
 
-            out << gameIdx << ',' << moveIdx << ',' << sample.playerToMove << ',' << value
-                << ",\"" << planeToString(sample.red) << "\",\"" << planeToString(sample.blue)
-                << "\",\"" << policyToString(sample.policy) << "\"\n";
+            out << '{'
+                << "\"game\":" << gameIdx
+                << ",\"move\":" << moveIdx
+                << ",\"player\":" << sample.playerToMove
+                << ",\"value\":" << value
+                << ",\"red\":" << planeToJson(sample.red)
+                << ",\"blue\":" << planeToJson(sample.blue)
+                << ",\"policy\":" << policyToJson(sample.policy)
+                << "}\n";
         }
 
         std::cout << "Finished game " << gameIdx + 1 << "/" << games
