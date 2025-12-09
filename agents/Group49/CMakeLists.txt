@@ -28,7 +28,7 @@ FetchContent_MakeAvailable(googletest)
 
 # 2. Define the Test Executable
 # distinct from your main 'Group49' executable
-add_executable(HexTests tests/test_win_logic.cpp)
+add_executable(HexTests tests/tests.cpp)
 
 # 3. Link your Engine Source Files
 # You must include Position.cpp (and others) so the test can see them.

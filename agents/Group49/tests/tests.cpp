@@ -1,6 +1,8 @@
 ﻿#include <gtest/gtest.h>
 #include "../src/Position.h"
 #include "../src/Util.h"
+#include "../src/MCTS.h"
+
 
 using namespace engine;
 
@@ -241,4 +243,133 @@ TEST(WinCheck, BrokenBucketPath_NoWin) {
     // pos.printPosition();
 
     EXPECT_NO_WINNER(pos);
+}
+
+class ConsistencyTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        // Initialize LUTs if necessary (depending on your implementation)
+        // HexUtils::init_neighbors();
+    }
+};
+
+// TEST 1: MCTS vs MCTS (Realistic Game Paths)
+// checks consistency after every single move.
+TEST_F(ConsistencyTest, EngineSelfPlay_NoCorruption) {
+    FastRand rng;
+    // Run 5 full games
+    for (int game = 0; game < 5; ++game) {
+        Position pos(0); // Start Red
+        MCTS agent;
+
+        int moves = 0;
+        while (pos.getWinner() == -1) {
+            // 1. Assert Consistency BEFORE move
+            // (If this fails, your program exits, failing the test)
+            pos.checkConsistency();
+
+            // 2. Generate Move
+            // Use low iterations (e.g. 500) to keep unit tests fast
+            // but enough to generate semi-coherent lines.
+            int bestMove = agent.search(pos, 5000);
+            // 3. ASSERT LEGALITY (New)
+            // If this fails, the MCTS selected an occupied or OOB square
+            ASSERT_TRUE(pos.isMoveLegal(bestMove))
+                << "FATAL: MCTS returned illegal move " << bestMove
+                << " at move count " << moves;
+            // 3. Make Move
+            pos.makeMove(bestMove);
+            moves++;
+
+            // 4. Assert Consistency AFTER move
+            pos.checkConsistency();
+
+            // Safety break for infinite loops
+            if (moves > BOARD_AREA) break;
+        }
+        std::cout << moves << " moves in game " << game << std::endl;
+        // Assert game ended validly
+        EXPECT_NE(pos.getWinner(), -1) << "Game " << game << " did not finish.";
+    }
+}
+
+// TEST 2: Random vs Random (Chaos / Edge Cases)
+// Random moves are excellent for finding bitboard overlaps
+// because they fill the board in "swiss cheese" patterns.
+TEST_F(ConsistencyTest, RandomChaos_NoCorruption) {
+    FastRand rng;
+
+    // Run 50 fast random games
+    for (int game = 0; game < 50; ++game) {
+        Position pos(0);
+        int moves = 0;
+
+        while (pos.getWinner() == -1) {
+            // Check
+            pos.checkConsistency();
+
+            // Pick purely random legal move
+            int move = pos.getRandomLegalMove(rng);
+            if (move == -1) break; // Should be handled by getWinner/moveCount logic
+            // 3. ASSERT LEGALITY (New)
+            // If this fails, PDEP or bit-scan logic is broken
+            ASSERT_TRUE(pos.isMoveLegal(move))
+                << "FATAL: getRandomLegalMove returned occupied square " << move;
+            // Move
+            pos.makeMove(move);
+            moves++;
+
+            // Check
+            pos.checkConsistency();
+        }
+    }
+}
+
+class PerformanceTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+    }
+};
+
+// TEST: Benchmark MCTS Performance (Nodes Per Second)
+TEST_F(PerformanceTest, Calculate_NPS) {
+    // 1. Setup
+    Position pos(0); // Start with empty board
+    MCTS agent;
+
+    // Configuration: 100,000 iterations provides a stable average
+    int iterations = 100000;
+
+    std::cout << "[Benchmark] Starting MCTS Search (" << iterations << " iterations)..." << std::endl;
+
+    // 2. Start Timer
+    auto start = std::chrono::high_resolution_clock::now();
+
+    // 3. Run Search
+    // We discard the return value (best move) as we only care about speed here
+    agent.search(pos, iterations);
+
+    // 4. Stop Timer
+    auto end = std::chrono::high_resolution_clock::now();
+
+    // 5. Calculate Metrics
+    long long duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+    // Prevent division by zero if it runs instantly
+    if (duration_ms == 0) duration_ms = 1;
+
+    double seconds = duration_ms / 1000.0;
+    int nps = (int)(iterations / seconds);
+
+    // 6. Report Results
+    std::cout << "============================================" << std::endl;
+    std::cout << " Total Time: " << duration_ms << " ms" << std::endl;
+    std::cout << " Speed:      " << nps << " Nodes/Sec (NPS)" << std::endl;
+    std::cout << "============================================" << std::endl;
+
+    // 7. Quality Assertion
+    // < 10,000  = Poor (Likely memory allocation issues)
+    // 10k - 40k = Good (Standard implementation)
+    // > 50,000  = Excellent (Optimized Bitboards/DSU)
+    EXPECT_GT(nps, 25000) << "Performance is below the target threshold for this engine.";
 }

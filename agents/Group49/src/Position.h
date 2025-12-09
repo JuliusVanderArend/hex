@@ -4,6 +4,7 @@
 
 #ifndef GROUP49_POSITION_H
 #define GROUP49_POSITION_H
+#include <iostream>
 #include <vector>
 
 #include "../src/Util.h"
@@ -64,6 +65,40 @@ namespace engine {
 
         int moveCount = 0;
         HexDSU dsus[2];
+        // Checks if a move is within bounds and the square is empty
+        bool isMoveLegal(int move) const {
+            if (move < 0 || move >= BOARD_AREA) return false;
+            // Check if the bit at 'move' is 0 in occupancy
+            return !((occupancy >> move) & 1);
+        }
+
+        // --- DEBUGGING HELPER ---
+        // verifying that no two stones occupy the same physical square.
+        void checkConsistency() const {
+            for (int i = 0; i < BOARD_AREA; ++i) {
+                // Red (0) is stored normally: Index i maps to Bit i
+                bool redClaim = (boards[0] >> i) & 1;
+
+                // Blue (1) is stored transposed: Physical Index i maps to Bit transpose(i)
+                // Note: We use the helper function logic here directly or call it if available
+                int r = i / BOARD_SIZE;
+                int c = i % BOARD_SIZE;
+                int transposedIdx = c * BOARD_SIZE + r;
+
+                bool blueClaim = (boards[1] >> transposedIdx) & 1;
+
+                if (redClaim && blueClaim) {
+                    std::cerr << "\n========================================" << std::endl;
+                    std::cerr << "CRITICAL ERROR: BOARD CORRUPTION DETECTED" << std::endl;
+                    std::cerr << "========================================" << std::endl;
+                    std::cerr << "Overlap at Index: " << i << " (Row " << r << ", Col " << c << ")" << std::endl;
+                    std::cerr << "Red claims vertical index:   " << i << std::endl;
+                    std::cerr << "Blue claims transposed index: " << transposedIdx << std::endl;
+                    std::cerr << "Aborting program to prevent undefined behavior." << std::endl;
+                    exit(1);
+                }
+            }
+        }
     private:
         Board boards[2]; //frist board is us, second is them (always transposed)
         Board occupancy = 0;
