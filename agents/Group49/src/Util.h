@@ -6,6 +6,9 @@
 #define GROUP49_UTIL_H
 #include <array>
 #include <cstdint>
+#include <sstream>
+#include <string>
+
 namespace engine {
     using Board = unsigned __int128;
     using Move = uint_fast8_t;
@@ -94,6 +97,38 @@ namespace engine {
         return TRANSPOSE_LUT[move];
     }
 
+    constexpr std::array<Board, BOARD_AREA> create_neighbor_mask_table() {
+        std::array<Board, BOARD_AREA> table{}; // Zero initialize
+
+        // The 6 directions in (row, col) offsets for a skewed Hex grid
+        // (Same offsets as create_neighbor_table)
+        constexpr int dr[6] = {-1, -1,  0, 0,  1, 1};
+        constexpr int dc[6] = { 0,  1, -1, 1, -1, 0};
+
+        for (int i = 0; i < BOARD_AREA; ++i) {
+            int r = i / BOARD_SIZE;
+            int c = i % BOARD_SIZE;
+            Board mask = 0;
+
+            for (int k = 0; k < 6; ++k) {
+                int nr = r + dr[k];
+                int nc = c + dc[k];
+
+                // Check boundaries
+                if (nr >= 0 && nr < BOARD_SIZE && nc >= 0 && nc < BOARD_SIZE) {
+                    int n_idx = nr * BOARD_SIZE + nc;
+                    // Cast '1' to Board (u128) to prevent overflow before shift
+                    mask |= ((Board)1 << n_idx);
+                }
+            }
+            table[i] = mask;
+        }
+        return table;
+    }
+
+    // The compile-time constant for Bitwise Neighbor Checks
+    constexpr auto NEIGHBOR_MASKS = create_neighbor_mask_table();
+
     struct FastRand {
         uint64_t state = 0xCAFEBABE;
         uint64_t next() {
@@ -108,6 +143,36 @@ namespace engine {
             return next() % max;
         }
     };
+
+    inline int stringToIndex(std::string coord) {
+        if (coord == "swap") return -1; // Handle swap if you ever implement it
+
+        // Lowercase string
+        char colChar = std::tolower(coord[0]);
+
+        // Handle the Go convention where 'i' is sometimes skipped.
+        // MoHex/HexGui usually keeps 'i' for Hex, but be careful.
+        // We will assume standard a,b,c...k mapping for now.
+        int col = colChar - 'a';
+
+        // Parse row (everything after the first char)
+        int row = std::stoi(coord.substr(1)) - 1; // 1-based to 0-based
+
+        return row * BOARD_SIZE + col;
+    }
+
+    // Converts index -> "c5"
+    inline std::string indexToString(int index) {
+        if (index < 0) return "resign";
+
+        int row = index / BOARD_SIZE;
+        int col = index % BOARD_SIZE;
+
+        std::stringstream ss;
+        ss << (char)('a' + col);
+        ss << (row + 1);
+        return ss.str();
+    }
 } // engine
 
 #endif //GROUP49_UTIL_H

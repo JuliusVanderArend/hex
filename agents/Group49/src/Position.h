@@ -4,6 +4,8 @@
 
 #ifndef GROUP49_POSITION_H
 #define GROUP49_POSITION_H
+#include <vector>
+
 #include "../src/Util.h"
 
 namespace engine {
@@ -49,6 +51,7 @@ namespace engine {
 
         void makeMove(Move move);
         void unmakeMove(Move move);
+        std::vector<int> getLegalMoves() const;
         void makeRandomRolloutMove(FastRand& rng);
         Move getRandomLegalMove(FastRand& rng) const;
         int getWinner() const;
@@ -60,12 +63,13 @@ namespace engine {
         int sideToMove = 0;
 
         int moveCount = 0;
+        HexDSU dsus[2];
     private:
         Board boards[2]; //frist board is us, second is them (always transposed)
         Board occupancy = 0;
         // Board occupancyTranspose = 0;
 
-        HexDSU dsus[2];
+
 
         bool isWon(Board* board);
 

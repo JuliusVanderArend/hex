@@ -2,7 +2,7 @@
 project(Group49)
 
 set(CMAKE_CXX_STANDARD 20)
-
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -static")
 if(NOT MSVC)
     add_compile_options(-march=native -O3)
 endif()
@@ -11,7 +11,10 @@ add_executable(Group49 main.cpp
         src/Util.cpp
         src/Util.h
         src/Position.cpp
-        src/Position.h)
+        src/Position.h
+        src/Node.cpp
+        src/MCTS.cpp
+        src/MCTS.h)
 
 # 1. Fetch GoogleTest
 include(FetchContent)
