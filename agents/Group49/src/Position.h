@@ -61,6 +61,11 @@ namespace engine {
         void printBitboard(Board board) const;
         void printPosition() const;
 
+        bool hasStone(int player, Move move) const;
+
+        Board getBoardBits(int player) const { return boards[player]; }
+        Board getOccupancyBits() const { return occupancy; }
+
         int sideToMove = 0;
 
         int moveCount = 0;
