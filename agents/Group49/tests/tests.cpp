@@ -418,9 +418,9 @@ TEST_F(OnnxTest, RandomSelfPlay_Inference) {
     }
     fclose(f);
 
-    std::wstring wModelPath(MODEL_PATH.begin(), MODEL_PATH.end());
+    std::string wModelPath(MODEL_PATH.begin(), MODEL_PATH.end());
     Inference net(wModelPath);
-    Position pos(0); // Start empty
+    Position pos(0);
     FastRand rng;
 
     // 2. PLAY SOME MOVES (Clutter the board)

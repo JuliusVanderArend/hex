@@ -20,11 +20,11 @@ class Inference {
     Ort::MemoryInfo memory_info;
 
     // Fixed Input/Output Names (Must match your Python export!)
-    const char* input_names[1] = {"input"};
+    const char* input_names[1] = {"state"};
     const char* output_names[2] = {"policy", "value"};
 
 public:
-    Inference(const std::wstring& model_path)
+    Inference(const std::string& model_path)
         : env(ORT_LOGGING_LEVEL_WARNING, "HexBot"),
           memory_info(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault)) 
     {
@@ -46,8 +46,7 @@ public:
         std::vector<float> input_tensor_values = pos.toTensor();
 
         // 2. Create the ONNX Tensor wrapper
-        // Note: INPUT_SIZE must match input_tensor_values.size() (363)
-        std::array<int64_t, 4> input_shape = {1, 3, 11, 11};
+        std::array<int64_t, 4> input_shape = {1, 6, 11, 11};
 
         Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
             memory_info,

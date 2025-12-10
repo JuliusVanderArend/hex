@@ -18,7 +18,7 @@ namespace engine {
     constexpr int BOARD_AREA = BOARD_SIZE * BOARD_SIZE; // 121
     constexpr int MAX_MOVES  = BOARD_AREA;
 
-    const std::string MODEL_PATH = "C:/Users/gamin/git/COMP34111-AI-Games-Hex/agents/Group49/models/hex_run_001.onnx";
+    const std::string MODEL_PATH = "/home/julius/git/hex/agents/Group49/models/hex_run_001.onnx";
 
 
     constexpr Move V_START = 121; // Top (Red) / Left (Blue)

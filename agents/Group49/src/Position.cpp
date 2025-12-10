@@ -260,30 +260,32 @@ void Position::makeRandomRolloutMove(FastRand& rng) {
     }
 
     std::vector<float> Position::toTensor() const {
-        // 3 channels * 11 * 11 = 363 floats
-        constexpr int CHANNELS = 3;
-        constexpr int PLANE_SIZE = BOARD_AREA; // 121
+        constexpr int CHANNELS = 6;
+        constexpr int PLANE_SIZE = 121;
 
         std::vector<float> tensor;
         tensor.reserve(CHANNELS * PLANE_SIZE);
 
-        // --- CHANNEL 0: Red Stones (Player 0) ---
-        for (int i = 0; i < PLANE_SIZE; ++i) {
-            // Extract bit i from Red's board
+        // --- 1. Red Stones ---
+        for (int i = 0; i < PLANE_SIZE; ++i)
             tensor.push_back(((boards[0] >> i) & 1) ? 1.0f : 0.0f);
-        }
 
-        // --- CHANNEL 1: Blue Stones (Player 1) ---
-        for (int i = 0; i < PLANE_SIZE; ++i) {
-            // Extract bit i from Blue's board
+        // --- 2. Blue Stones ---
+        for (int i = 0; i < PLANE_SIZE; ++i)
             tensor.push_back(((boards[1] >> i) & 1) ? 1.0f : 0.0f);
-        }
 
-        // --- CHANNEL 2: Side to Move ---
-        // AlphaZero style: An entire plane of 1s if it's Player 0's turn, 0s otherwise.
-        float turnValue = (sideToMove == 0) ? 1.0f : 0.0f;
-        for (int i = 0; i < PLANE_SIZE; ++i) {
-            tensor.push_back(turnValue);
+        // --- 3. Turn (Color) ---
+        float turnVal = (sideToMove == 0) ? 1.0f : 0.0f;
+        for (int i = 0; i < PLANE_SIZE; ++i)
+            tensor.push_back(turnVal);
+
+        // --- 4, 5, 6. Placeholders (ZEROS) ---
+        // The model was trained with these set to 0.0.
+        // We must replicate that exactly.
+        for (int k = 0; k < 3; ++k) {
+            for (int i = 0; i < PLANE_SIZE; ++i) {
+                tensor.push_back(0.0f);
+            }
         }
 
         return tensor;
