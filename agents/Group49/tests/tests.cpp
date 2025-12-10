@@ -1,8 +1,9 @@
-﻿#include <gtest/gtest.h>
+﻿#include <iomanip>
+#include <gtest/gtest.h>
 #include "../src/Position.h"
 #include "../src/Util.h"
 #include "../src/MCTS.h"
-
+#include "../src/Inference.cpp"
 
 using namespace engine;
 
@@ -372,4 +373,89 @@ TEST_F(PerformanceTest, Calculate_NPS) {
     // 10k - 40k = Good (Standard implementation)
     // > 50,000  = Excellent (Optimized Bitboards/DSU)
     EXPECT_GT(nps, 25000) << "Performance is below the target threshold for this engine.";
+}
+
+class OnnxTest : public ::testing::Test {
+protected:
+    // Helper to print top K moves from policy
+    void printTopMoves(const std::vector<float>& policy, int topK = 5) {
+        // Create pairs of (index, probability)
+        std::vector<std::pair<int, float>> moves;
+        for (int i = 0; i < policy.size(); ++i) {
+            moves.push_back({i, policy[i]});
+        }
+
+        // Sort descending by probability
+        std::sort(moves.begin(), moves.end(), [](const auto& a, const auto& b) {
+            return a.second > b.second;
+        });
+
+        std::cout << "--- Top " << topK << " Policy Moves ---" << std::endl;
+        for (int i = 0; i < topK && i < moves.size(); ++i) {
+            int moveIdx = moves[i].first;
+            float prob = moves[i].second;
+
+            // Convert index to A1, B2 notation for readability
+            int r = moveIdx / BOARD_SIZE;
+            int c = moveIdx % BOARD_SIZE;
+            char colChar = 'A' + c;
+
+            std::cout << std::setw(2) << (i + 1) << ". "
+                      << colChar << (r + 1) << " (" << moveIdx << ") "
+                      << " -> " << std::fixed << std::setprecision(4) << prob
+                      << std::endl;
+        }
+    }
+};
+
+TEST_F(OnnxTest, RandomSelfPlay_Inference) {
+    // Simple check to ensure model exists (avoids confusing ONNX crash)
+    FILE* f = fopen(MODEL_PATH.c_str(), "r");
+    if (!f) {
+        std::cerr << "[SKIP] Model file not found at: " << MODEL_PATH << std::endl;
+        std::cerr << "Please export your PyTorch model to this location to run this test." << std::endl;
+        GTEST_SKIP();
+    }
+    fclose(f);
+
+    std::wstring wModelPath(MODEL_PATH.begin(), MODEL_PATH.end());
+    Inference net(wModelPath);
+    Position pos(0); // Start empty
+    FastRand rng;
+
+    // 2. PLAY SOME MOVES (Clutter the board)
+    int movesToPlay = 8;
+    std::cout << "Playing " << movesToPlay << " random moves..." << std::endl;
+
+    for (int i = 0; i < movesToPlay; ++i) {
+        pos.makeRandomRolloutMove(rng);
+    }
+
+    // 3. VISUALIZE INPUT
+    pos.printPosition();
+
+    // 4. RUN INFERENCE
+    std::cout << "Running ONNX Inference..." << std::endl;
+    auto result = net.predict(pos);
+
+    std::vector<float> policy = result.first;
+    float value = result.second;
+
+    // 5. PRINT RESULTS
+    std::cout << "\n================ INFERENCE RESULTS ================" << std::endl;
+    std::cout << "Predicted Value (Win Prob for Current Player): " << value << std::endl;
+
+    // Sanity checks
+    EXPECT_GE(value, -1.0f);
+    EXPECT_LE(value, 1.0f);
+    EXPECT_EQ(policy.size(), 121);
+
+    // Check if probabilities sum to roughly 1.0 (if your model outputs softmax)
+    // If your model outputs logits, this assertion will fail (which is fine, just remove it).
+    float sum = 0.0f;
+    for (float p : policy) sum += p;
+    std::cout << "Policy Sum: " << sum << std::endl;
+
+    printTopMoves(policy);
+    std::cout << "===================================================" << std::endl;
 }

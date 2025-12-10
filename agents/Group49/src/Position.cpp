@@ -259,38 +259,35 @@ void Position::makeRandomRolloutMove(FastRand& rng) {
         return -1;
     }
 
-// bool Position::isWon(Board* board) {
-//     Board wavefront = *board & ROW_MASK;
-//     if (wavefront == 0) return false;
-//
-//     constexpr Board NOT_COL_A = ~COL_MASK;
-//
-//     Board activeStones = *board;
-//     Board oldWavefront = 0;
-//
-//     while (true) {
-//         oldWavefront = wavefront;
-//
-//         Board down = (wavefront << BOARD_SIZE);
-//         Board up   = (wavefront >> BOARD_SIZE);
-//
-//         Board down_left = (wavefront & NOT_COL_A) << (BOARD_SIZE - 1);
-//
-//         constexpr Board NOT_COL_K = ~(COL_MASK << (BOARD_SIZE - 1));
-//         Board up_right = (wavefront & NOT_COL_K) >> (BOARD_SIZE - 1);
-//
-//
-//         Board right = (wavefront & NOT_COL_K) << 1;
-//         Board left  = (wavefront & NOT_COL_A) >> 1;
-//
-//         Board expansion = down | up | down_left | up_right | right | left;
-//
-//         wavefront |= (expansion & activeStones);
-//         if (wavefront == oldWavefront) break;
-//     }
-//
-//     return (wavefront & BOTTOM_ROW_MASK) != 0;
-// }
+    std::vector<float> Position::toTensor() const {
+        // 3 channels * 11 * 11 = 363 floats
+        constexpr int CHANNELS = 3;
+        constexpr int PLANE_SIZE = BOARD_AREA; // 121
+
+        std::vector<float> tensor;
+        tensor.reserve(CHANNELS * PLANE_SIZE);
+
+        // --- CHANNEL 0: Red Stones (Player 0) ---
+        for (int i = 0; i < PLANE_SIZE; ++i) {
+            // Extract bit i from Red's board
+            tensor.push_back(((boards[0] >> i) & 1) ? 1.0f : 0.0f);
+        }
+
+        // --- CHANNEL 1: Blue Stones (Player 1) ---
+        for (int i = 0; i < PLANE_SIZE; ++i) {
+            // Extract bit i from Blue's board
+            tensor.push_back(((boards[1] >> i) & 1) ? 1.0f : 0.0f);
+        }
+
+        // --- CHANNEL 2: Side to Move ---
+        // AlphaZero style: An entire plane of 1s if it's Player 0's turn, 0s otherwise.
+        float turnValue = (sideToMove == 0) ? 1.0f : 0.0f;
+        for (int i = 0; i < PLANE_SIZE; ++i) {
+            tensor.push_back(turnValue);
+        }
+
+        return tensor;
+    }
 
     void Position::printBitboard(Board board) const {
         std::cout << "   Raw Bitboard View:" << std::endl;

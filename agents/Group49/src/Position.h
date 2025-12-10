@@ -57,6 +57,7 @@ namespace engine {
         Move getRandomLegalMove(FastRand& rng) const;
         int getWinner() const;
 
+        std::vector<float> toTensor() const;
 
         void printBitboard(Board board) const;
         void printPosition() const;
