@@ -33,7 +33,7 @@ FetchContent_Declare(googletest URL https://github.com/google/googletest/archive
 FetchContent_MakeAvailable(googletest)
 
 add_executable(HexTests tests/tests.cpp)
-#target_sources(HexTests PRIVATE src/Position.cpp src/Util.cpp src/NeuralNet.cpp)
+#target_sources(HexTests PRIVATE src/Position.cpp src/Util.cpp src/Inference.cpp)
 target_sources(HexTests PRIVATE src/Position.cpp src/Util.cpp)
 
 target_link_libraries(HexTests PRIVATE gtest_main onnxruntime)
