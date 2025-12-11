@@ -13,7 +13,7 @@ include_directories(${ONNX_ROOT}/include)
 link_directories(${ONNX_ROOT}/lib)
 
 # 2. DEFINE EXECUTABLES
-add_executable(Group49 main.cpp src/Util.cpp src/Util.h src/Position.cpp src/Position.h src/Node.cpp src/MCTS.cpp src/MCTS.h src/Inference.cpp)
+add_executable(Group49 main.cpp src/Util.cpp src/Util.h src/Position.cpp src/Position.h src/Node.cpp src/MCTS.h src/Inference.cpp)
 #add_executable(Group49 main.cpp src/Util.cpp src/Util.h src/Position.cpp src/Position.h src/Node.cpp src/MCTS.cpp src/MCTS.h)
 
 # 3. LINK LIBRARIES (Simple and Clean)
