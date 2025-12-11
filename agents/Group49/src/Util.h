@@ -5,9 +5,11 @@
 #ifndef GROUP49_UTIL_H
 #define GROUP49_UTIL_H
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <sstream>
 #include <string>
+#include <thread>
 
 namespace engine {
     using Board = unsigned __int128;
@@ -133,7 +135,31 @@ namespace engine {
     constexpr auto NEIGHBOR_MASKS = create_neighbor_mask_table();
 
     struct FastRand {
-        uint64_t state = 0xCAFEBABE;
+        uint64_t state;
+
+        // CONSTRUCTOR: Auto-seeds using Time + Thread ID
+        FastRand() {
+            // 1. Get High-Res Time
+            auto now = std::chrono::high_resolution_clock::now();
+            uint64_t nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
+
+            // 2. Get Thread ID (Hashed)
+            std::hash<std::thread::id> hasher;
+            uint64_t tid = hasher(std::this_thread::get_id());
+
+            // 3. Combine them to form a unique seed
+            // We mix them to ensure threads starting at the same nanosecond still differ
+            state = nanos ^ (tid << 1) ^ 0xCAFEBABE;
+
+            // Warm up the RNG to diverge states further
+            next();
+            next();
+            next();
+        }
+
+        // Allow manual seeding if needed for reproduction
+        explicit FastRand(uint64_t seed) : state(seed) {}
+
         uint64_t next() {
             uint64_t x = state;
             x ^= x << 13;
@@ -141,11 +167,12 @@ namespace engine {
             x ^= x << 17;
             return state = x;
         }
-        // Returns number in [0, max-1]
+
         uint64_t range(uint64_t max) {
             return next() % max;
         }
     };
+
 
     inline int stringToIndex(std::string coord) {
         if (coord == "swap") return -1; // Handle swap if you ever implement it

@@ -6,6 +6,9 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <thread>
+#include <mutex>
+#include <atomic>
 
 #include "src/MCTS.h"
 #include "src/Position.h"
@@ -13,17 +16,30 @@
 
 using namespace engine;
 
+// Mutex for thread-safe file writing and console output
+std::mutex io_mutex;
+
+// Updated Sample struct to hold all 6 planes explicitly
+// This makes it easy to write clear JSON keys
 struct Sample {
     int playerToMove;
-    std::array<uint8_t, BOARD_AREA> red;
-    std::array<uint8_t, BOARD_AREA> blue;
+    std::array<uint8_t, BOARD_AREA> red;         // Plane 0
+    std::array<uint8_t, BOARD_AREA> blue;        // Plane 1
+    std::array<uint8_t, BOARD_AREA> turn;        // Plane 2
+    std::array<uint8_t, BOARD_AREA> last_move;   // Plane 3
+    std::array<uint8_t, BOARD_AREA> conn_start;  // Plane 4
+    std::array<uint8_t, BOARD_AREA> conn_end;    // Plane 5
+
     std::array<double, BOARD_AREA> policy;
 };
 
-std::array<uint8_t, BOARD_AREA> buildPlane(const Position& pos, int player) {
+// Helper: Extract a specific channel from the flat float vector
+std::array<uint8_t, BOARD_AREA> extractPlane(const std::vector<float>& tensor, int channelIdx) {
     std::array<uint8_t, BOARD_AREA> plane{};
-    for (int idx = 0; idx < BOARD_AREA; ++idx) {
-        plane[idx] = pos.hasStone(player, idx) ? 1 : 0;
+    int offset = channelIdx * BOARD_AREA;
+    for (int i = 0; i < BOARD_AREA; ++i) {
+        // Safe to cast 1.0f/0.0f to uint8
+        plane[i] = static_cast<uint8_t>(tensor[offset + i]);
     }
     return plane;
 }
@@ -62,19 +78,31 @@ GameSamples playSelfPlayGame(MCTS& agent, int iterations) {
     GameSamples record;
 
     while (pos.getWinner() == -1) {
+        // Run MCTS
         SearchResult result = agent.searchWithPolicy(pos, iterations);
+
+        // Fallback for no moves
         if (result.bestMove < 0) {
             auto legal = pos.getLegalMoves();
-            if (legal.empty()) {
-                break;
-            }
+            if (legal.empty()) break;
             result.bestMove = legal.front();
         }
 
         Sample sample;
         sample.playerToMove = pos.sideToMove;
-        sample.red = buildPlane(pos, 0);
-        sample.blue = buildPlane(pos, 1);
+
+        // --- NEW LOGIC: Extract All 6 Planes ---
+        // Requires Position::toTensor() to produce 6 channels:
+        // 0:Red, 1:Blue, 2:Turn, 3:LastMove, 4:Start, 5:End
+        std::vector<float> tensor = pos.toTensor();
+
+        sample.red        = extractPlane(tensor, 0);
+        sample.blue       = extractPlane(tensor, 1);
+        sample.turn       = extractPlane(tensor, 2);
+        sample.last_move  = extractPlane(tensor, 3); // Check index match with Position.cpp
+        sample.conn_start = extractPlane(tensor, 4);
+        sample.conn_end   = extractPlane(tensor, 5);
+
         sample.policy = result.policy;
         record.samples.push_back(sample);
 
@@ -82,10 +110,56 @@ GameSamples playSelfPlayGame(MCTS& agent, int iterations) {
     }
 
     record.winner = pos.getWinner();
-    if (record.winner == -1) {
-        record.winner = 2; // treat unresolved as draw
-    }
+    if (record.winner == -1) record.winner = 2; // Draw
+
     return record;
+}
+
+void worker(int iterations, int totalGames, std::atomic<int>& gamesPlayed, std::ofstream& out) {
+    // Thread-local MCTS agent (critical for thread safety)
+    MCTS agent;
+
+    while (true) {
+        // Fetch next game index
+        int gameIdx = gamesPlayed.fetch_add(1);
+        if (gameIdx >= totalGames) return;
+
+        // Play
+        GameSamples record = playSelfPlayGame(agent, iterations);
+
+        // Save Result (Locking)
+        std::lock_guard<std::mutex> lock(io_mutex);
+
+        for (size_t moveIdx = 0; moveIdx < record.samples.size(); ++moveIdx) {
+            const Sample& sample = record.samples[moveIdx];
+            int value = 0;
+            if (record.winner != 2) {
+                value = (record.winner == sample.playerToMove) ? 1 : -1;
+            }
+
+            // Write all 6 planes to JSON
+            out << '{'
+                << "\"game\":" << gameIdx
+                << ",\"move\":" << moveIdx
+                << ",\"player\":" << sample.playerToMove
+                << ",\"value\":" << value
+                << ",\"red\":" << planeToJson(sample.red)
+                << ",\"blue\":" << planeToJson(sample.blue)
+                << ",\"turn\":" << planeToJson(sample.turn)
+                << ",\"last_move\":" << planeToJson(sample.last_move)
+                << ",\"conn_start\":" << planeToJson(sample.conn_start)
+                << ",\"conn_end\":" << planeToJson(sample.conn_end)
+                << ",\"policy\":" << policyToJson(sample.policy)
+                << "}\n";
+        }
+
+        // Optional: Progress log
+        if ((gameIdx + 1) % 1 == 0) {
+            std::cout << "Finished game " << gameIdx + 1 << "/" << totalGames
+                      << " (" << record.samples.size() << " moves) [Thread "
+                      << std::this_thread::get_id() << "]" << std::endl;
+        }
+    }
 }
 
 int main(int argc, char** argv) {
@@ -103,31 +177,24 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    MCTS agent;
-    for (int gameIdx = 0; gameIdx < games; ++gameIdx) {
-        GameSamples record = playSelfPlayGame(agent, iterations);
+    // Auto-detect threads
+    unsigned int nThreads = std::thread::hardware_concurrency();
+    if (nThreads == 0) nThreads = 1;
 
-        for (size_t moveIdx = 0; moveIdx < record.samples.size(); ++moveIdx) {
-            const Sample& sample = record.samples[moveIdx];
-            int value = 0;
-            if (record.winner != 2) {
-                value = (record.winner == sample.playerToMove) ? 1 : -1;
-            }
+    std::cout << "Starting Parallel Self-Play" << std::endl;
+    std::cout << "Games: " << games << " | Iterations: " << iterations << " | Threads: " << nThreads << std::endl;
 
-            out << '{'
-                << "\"game\":" << gameIdx
-                << ",\"move\":" << moveIdx
-                << ",\"player\":" << sample.playerToMove
-                << ",\"value\":" << value
-                << ",\"red\":" << planeToJson(sample.red)
-                << ",\"blue\":" << planeToJson(sample.blue)
-                << ",\"policy\":" << policyToJson(sample.policy)
-                << "}\n";
-        }
+    std::vector<std::thread> threads;
+    std::atomic<int> gamesPlayed{0};
 
-        std::cout << "Finished game " << gameIdx + 1 << "/" << games
-                  << " (" << record.samples.size() << " moves)" << std::endl;
+    for (unsigned int i = 0; i < nThreads; ++i) {
+        threads.emplace_back(worker, iterations, games, std::ref(gamesPlayed), std::ref(out));
     }
 
+    for (auto& t : threads) {
+        if (t.joinable()) t.join();
+    }
+
+    std::cout << "All games completed. Saved to " << outputPath << std::endl;
     return 0;
 }

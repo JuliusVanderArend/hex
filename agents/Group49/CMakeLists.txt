@@ -14,11 +14,20 @@ link_directories(${ONNX_ROOT}/lib)
 
 # 2. DEFINE EXECUTABLES
 add_executable(Group49 main.cpp src/Util.cpp src/Util.h src/Position.cpp src/Position.h src/Node.cpp src/MCTS.cpp src/MCTS.h src/Inference.cpp)
+add_executable(Group49SelfPlay
+        self_play.cpp
+        src/Util.cpp src/Util.h
+        src/Position.cpp src/Position.h
+        src/Node.cpp
+        src/MCTS.cpp src/MCTS.h
+        src/Inference.cpp
+)
 #add_executable(Group49 main.cpp src/Util.cpp src/Util.h src/Position.cpp src/Position.h src/Node.cpp src/MCTS.cpp src/MCTS.h)
 
 # 3. LINK LIBRARIES (Simple and Clean)
 # Linux finds libonnxruntime.so automatically via link_directories
 target_link_libraries(Group49 onnxruntime)
+target_link_libraries(Group49SelfPlay onnxruntime)
 
 # 4. COPY SHARED OBJECT (.so)
 # In Linux, we copy .so.1.19.2 (the versioned file) or the symbolic link
@@ -26,6 +35,11 @@ add_custom_command(TARGET Group49 POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${ONNX_ROOT}/lib/libonnxruntime.so.1.23.2"
         $<TARGET_FILE_DIR:Group49>/libonnxruntime.so.1.23.2)
+
+add_custom_command(TARGET Group49SelfPlay POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${ONNX_ROOT}/lib/libonnxruntime.so.1.23.2"
+        $<TARGET_FILE_DIR:Group49SelfPlay>/libonnxruntime.so.1.23.2)
 
 # --- TESTS ---
 include(FetchContent)

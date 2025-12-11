@@ -18,8 +18,10 @@ namespace engine {
         occupancy = 0;
         dsus[0].reset();
         dsus[1].reset();
+        lastMove = 1;
     }
     void Position::makeMove(Move move) {
+        lastMove = move;
         Move canonicalMove = sideToMove==0? move: transposeMove(move);
         setHex(canonicalMove,&boards[sideToMove]);
         if (canonicalMove < BOARD_SIZE) {
@@ -272,22 +274,50 @@ void Position::makeRandomRolloutMove(FastRand& rng) {
 
         // --- 2. Blue Stones ---
         for (int i = 0; i < PLANE_SIZE; ++i)
-            tensor.push_back(((boards[1] >> i) & 1) ? 1.0f : 0.0f);
+            tensor.push_back(((boards[1] >> transposeMove(i)) & 1) ? 1.0f : 0.0f);
 
         // --- 3. Turn (Color) ---
         float turnVal = (sideToMove == 0) ? 1.0f : 0.0f;
         for (int i = 0; i < PLANE_SIZE; ++i)
             tensor.push_back(turnVal);
 
-        // --- 4, 5, 6. Placeholders (ZEROS) ---
-        // The model was trained with these set to 0.0.
-        // We must replicate that exactly.
-        for (int k = 0; k < 3; ++k) {
-            for (int i = 0; i < PLANE_SIZE; ++i) {
+        for (int i = 0; i < PLANE_SIZE; ++i) {
+            // If i matches the last move played, set to 1.0, else 0.0
+            // If lastMove is -1 (start of game), this entire plane will be 0.0
+            // should transpose for blue????
+            if (i == lastMove) {
+                tensor.push_back(1.0f);
+            } else {
                 tensor.push_back(0.0f);
             }
         }
 
+        for (int i = 0; i < PLANE_SIZE; ++i) {
+            bool isRed = (boards[0] >> i) & 1;
+            bool isBlue = (boards[1] >> i) & 1;
+            bool connected = false;
+
+            if (isRed) {
+                connected = dsus[0].isConnected(i, V_START);
+            } else if (isBlue) {
+                connected = dsus[1].isConnected(transposeMove(i), V_START);
+            }
+            tensor.push_back(connected ? 1.0f : 0.0f);
+        }
+
+        // Red -> Bottom (V_END), Blue -> Right (V_END)
+        for (int i = 0; i < PLANE_SIZE; ++i) {
+            bool isRed = (boards[0] >> i) & 1;
+            bool isBlue = (boards[1] >> i) & 1;
+            bool connected = false;
+
+            if (isRed) {
+                connected = dsus[0].isConnected(i, V_END);
+            } else if (isBlue) {
+                connected = dsus[1].isConnected(transposeMove(i), V_END);
+            }
+            tensor.push_back(connected ? 1.0f : 0.0f);
+        }
         return tensor;
     }
 

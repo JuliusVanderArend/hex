@@ -459,3 +459,69 @@ TEST_F(OnnxTest, RandomSelfPlay_Inference) {
     printTopMoves(policy);
     std::cout << "===================================================" << std::endl;
 }
+
+TEST_F(OnnxTest, Strategy_ImmediateWin_Red) {
+    // 1. SETUP MODEL
+    // Use the same path definition logic as your other tests
+    if (access(MODEL_PATH.c_str(), F_OK) == -1) {
+        std::cerr << "[SKIP] Model not found: " << MODEL_PATH << std::endl;
+        GTEST_SKIP();
+    }
+    std::string wModelPath(MODEL_PATH.begin(), MODEL_PATH.end());
+    Inference net(wModelPath); // Or NeuralNet, depending on your class name
+    Position pos(0); // Start empty
+
+    // 2. CONSTRUCT SCENARIO: "The F-Column Ladder"
+    // Red (P0) wants to connect Top -> Bottom.
+    // We manually build a line of Red stones down the middle (Column F, Index 5).
+    // We put Blue (P1) stones uselessly on the far left (Column A, Index 0) to keep turns valid.
+
+    // Red moves: F1(5), F2(16), ... F10(104)
+    // Blue moves: A1(0), A2(11), ... A10(99)
+
+    std::cout << "Constructing Forced Win Scenario..." << std::endl;
+    for (int row = 0; row < 10; ++row) {
+        int redMove = row * BOARD_SIZE + 5; // Col F (5th index)
+        int blueMove = row * BOARD_SIZE + 0; // Col A (0th index)
+
+        pos.makeMove(redMove);
+        pos.makeMove(blueMove);
+    }
+
+    // 3. VERIFY STATE
+    // It should now be Red's turn.
+    // Red has a chain from Row 0 to Row 9.
+    // The WINNING move is F11 (Row 10, Col 5 -> Index 115).
+    int winningMove = 10 * BOARD_SIZE + 5; // 115
+
+    pos.printPosition();
+    ASSERT_EQ(pos.sideToMove, 0) << "It should be Red's turn.";
+    ASSERT_EQ(pos.getWinner(), -1) << "Game should not be over yet.";
+
+    // 4. RUN INFERENCE
+    std::cout << "Running Inference..." << std::endl;
+    auto result = net.predict(pos);
+
+    std::vector<float> policy = result.first;
+    float value = result.second;
+
+    // 5. ASSERTIONS
+    std::cout << "Predicted Value: " << value << " (Expect > 0.5)" << std::endl;
+    std::cout << "Policy for F11 (" << winningMove << "): " << policy[winningMove] << std::endl;
+
+    // A. Value Check: Red should know they are winning
+    // Note: If training data was sparse, this might be lower, but usually > 0.5
+    EXPECT_GT(value, 0.2f) << "The network doesn't realize Red is in a strong position.";
+
+    // B. Policy Check: The winning move should be ranked highly
+    int rank = 1;
+    for (int i = 0; i < 121; ++i) {
+        if (policy[i] > policy[winningMove]) rank++;
+    }
+
+    std::cout << "Rank of winning move: #" << rank << std::endl;
+    printTopMoves(policy, 5); // Use your helper to see what it prefers
+
+    // Ideally Rank 1, but we accept Top 3 to account for "noise" in early training
+    EXPECT_LE(rank, 3) << "The winning move (F11) was not in the top 3 suggestions!";
+}

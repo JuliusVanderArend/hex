@@ -108,7 +108,7 @@ namespace engine {
     private:
         Board boards[2]; //frist board is us, second is them (always transposed)
         Board occupancy = 0;
-        // Board occupancyTranspose = 0;
+        Move lastMove = -1;
 
 
 
