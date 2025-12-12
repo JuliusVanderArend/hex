@@ -1,8 +1,4 @@
-﻿//
-// Created by Julius on 09/12/2025.
-//
-
-#ifndef GROUP49_MCTS_H
+﻿#ifndef GROUP49_MCTS_H
 #define GROUP49_MCTS_H
 
 #include <vector>
@@ -11,230 +7,293 @@
 #include <algorithm>
 #include <array>
 #include <iostream>
-#include "../src/Position.h"
+#include <utility>
+
+#include "Position.h"
+#include "Util.h"
+
 namespace engine {
-    // Lightweight Tree Node
-    // Memory footprint optimized: We do not store the full Board state.
-    struct Node {
-        int move_idx;          // The move that created this node
-        int player_just_moved; // 0 (Red) or 1 (Blue)
-        Node* parent;
-        std::vector<Node*> children;
 
-        // Statistics
-        int visits = 0;
-        double score = 0.0;    // Wins accumulated for the parent of this node
+struct Node; // Forward declaration
 
-        // Expansion Management
-        std::vector<int> unexpanded_moves;
 
-        // Constructor: Populates legal moves immediately using bitscan
-        Node(int move, int player, Node* parent_node, const Position& pos)
-            : move_idx(move), player_just_moved(player), parent(parent_node) {
+// ChildEntry: statistics stored on the edge parent → child
+struct ChildEntry {
+    int move = -1;          // Move index (0..BOARD_AREA-1)
+    Node* child = nullptr;  // Created lazily during selection/expansion
+    double P = 0.0;         // Prior probability from policy network (or uniform)
+    int N = 0;              // Visit count
+    double W = 0.0;         // Total accumulated value
+    double Q() const { return N ? (W / N) : 0.0; }
+};
 
-            // Use the fast bitscan helper from Position
-            unexpanded_moves = pos.getLegalMoves();
+
+// Node: represents a position reached by move_from_parent
+// Edge statistics live in ChildEntry, not in Node itself.
+struct Node {
+    int move_from_parent = -1;    // Move that created this node (root = -1)
+    int player_just_moved = -1;   // Player who played move_from_parent
+    Node* parent = nullptr;
+
+    std::vector<ChildEntry> children; // One entry per legal move after expansion
+    bool expanded = false;            // Becomes true after expandNode()
+    int visits = 0;                   // Number of visits to this node
+
+    Node(int mv = -1, int player = -1, Node* p = nullptr)
+        : move_from_parent(mv), player_just_moved(player), parent(p) {}
+
+    ~Node() {
+        for (auto &ce : children) {
+            if (ce.child) delete ce.child;
+            ce.child = nullptr;
         }
+    }
 
-        ~Node() {
-            for (Node* child : children) delete child;
+    bool isFullyExpanded() const {
+        if (!expanded) return false;
+        for (const auto &ce : children) {
+            if (ce.move >= 0 && ce.child == nullptr)
+                return false;
         }
+        return true;
+    }
+};
 
-        bool isFullyExpanded() const {
-            return unexpanded_moves.empty();
-        }
 
-        bool isTerminal() const {
-            // Terminal if no moves left AND no children created
-            return unexpanded_moves.empty() && children.empty();
-        }
-    };
-
+// SearchResult: returned by searchWithPolicy()
+// policy[i] = normalized visit count for move i
 struct SearchResult {
     int bestMove = -1;
     std::array<double, BOARD_AREA> policy{};
 };
 
+
+// MCTS CLASS
 class MCTS {
 public:
-    // Parameters
-    // C_PARAM: Exploration constant. sqrt(2) is theoretical,
-    // but often 0.6-1.0 works better for games with branching factor ~100.
-    double C_PARAM = 1.0;
+    double cpuct = 1.0;   // PUCT exploration constant
 
-    // Helper RNG for expansion choices (Position uses its own for rollouts)
     FastRand mcts_rng;
 
-    // ------------------------------------------------------------------------
-    // MAIN SEARCH FUNCTION
-    // ------------------------------------------------------------------------
+    MCTS() = default;
+    ~MCTS() = default;
+
+    // Returns a move chosen by most visits
     int search(const Position& rootPos, int iterations) {
         return searchWithPolicy(rootPos, iterations).bestMove;
     }
 
+    // Runs MCTS and returns move + visit distribution
     SearchResult searchWithPolicy(const Position& rootPos, int iterations) {
-        // 1. Root Node Creation
-        // The root represents the state *before* we make a move.
-        // So 'player_just_moved' is the opponent of sideToMove.
-        Node* root = new Node(-1, rootPos.sideToMove ^ 1, nullptr, rootPos);
+        Node* root = new Node(-1, rootPos.sideToMove ^ 1, nullptr);
 
-        for (int i = 0; i < iterations; ++i) {
-            // A. Clone the board (Trivial Copy: very fast)
-            Position scratchPos = rootPos;
+        for (int it = 0; it < iterations; ++it) {
+            Position pos = rootPos;
 
-            // B. Selection
-            Node* leaf = select(root, scratchPos);
+            // -------------------
+            // Selection
+            // -------------------
+            std::vector<std::pair<Node*, int>> path;
+            Node* node = root;
 
-            // C. Expansion
-            // If the game isn't effectively over at this leaf, expand it.
-            // Note: getWinner returns -1 if ongoing.
-            if (scratchPos.getWinner() == -1 && !leaf->isTerminal()) {
-                leaf = expand(leaf, scratchPos);
+            while (node->expanded && !isTerminalPosition(pos)) {
+                int idx = select_puct(node);
+                if (idx < 0 || idx >= (int)node->children.size()) break;
+
+                int mv = node->children[idx].move;
+                pos.makeMove(mv);
+
+                if (!node->children[idx].child) {
+                    node->children[idx].child =
+                        new Node(mv, pos.sideToMove ^ 1, node);
+                }
+
+                path.emplace_back(node, idx);
+                node = node->children[idx].child;
             }
 
-            // D. Simulation
-            // Run the optimized random rollout
-            int winner = simulate(scratchPos);
+            // -------------------
+            // Expansion + Evaluation
+            // -------------------
+            int winner = -1;
+            if (isTerminalPosition(pos)) {
+                winner = pos.getWinner();
+            } else {
+                // TODO: Replace uniform priors + rollout with CNN-based priors + value.
+                std::vector<double> priors; // empty → uniform priors
+                expandNode(node, pos, priors);
 
-            // E. Backpropagation
-            backpropagate(leaf, winner);
+                // Rollout value (placeholder until CNN integration)
+                winner = simulate(pos);
+            }
+
+            // -------------------
+            // Backpropagation
+            // -------------------
+            backpropagate(path, node, winner);
         }
 
-        // 4. Select Robust Child (Max Visits) and capture visit distribution
+        // -------------------
+        // Build final policy
+        // -------------------
         SearchResult result;
         result.policy.fill(0.0);
-        double totalVisits = 0.0;
-        int maxVisits = -1;
 
-        for (Node* child : root->children) {
-            result.policy[child->move_idx] = static_cast<double>(child->visits);
-            totalVisits += child->visits;
+        if (!root->expanded) {
+            Position tmp = rootPos;
+            expandNode(root, tmp, std::vector<double>{}); // uniform
+        }
 
-            if (child->visits > maxVisits) {
-                maxVisits = child->visits;
-                result.bestMove = child->move_idx;
+        double totalN = 0.0;
+        int bestMove = -1;
+        int bestN = -1;
+
+        for (const auto &ce : root->children) {
+            result.policy[ce.move] = ce.N;
+            totalN += ce.N;
+            if (ce.N > bestN) {
+                bestN = ce.N;
+                bestMove = ce.move;
             }
         }
 
-        if (totalVisits > 0.0) {
-            for (double& value : result.policy) {
-                value /= totalVisits;
-            }
+        if (totalN > 0) {
+            for (double &v : result.policy) v /= totalN;
         }
 
-        delete root; // Clean up the entire tree
+        result.bestMove = bestMove;
+        delete root;
         return result;
     }
 
 private:
-    // --- SELECTION ---
-    // Drills down the tree using UCT until it hits a node that is not fully expanded.
-    // Side Effect: Updates 'pos' to match the state at the leaf.
-    Node* select(Node* node, Position& pos) {
-        while (node->isFullyExpanded() && !node->isTerminal()) {
-            node = getBestUCTChild(node);
-            pos.makeMove(node->move_idx);
+    // Terminal detection using Position API
+    bool isTerminalPosition(const Position& pos) {
+        return pos.getWinner() != -1;
+    }
+
+
+    // Selection: choose child index by PUCT formula
+    int select_puct(Node* node) {
+        // 1. Pre-calculate the constant part of the U-term
+        // Sum of visits is usually just the parent's visit count (minus 1)
+        double parent_visits_sqrt = std::sqrt(std::max(1.0, (double)node->visits - 1));
+        double exploration_factor = cpuct * parent_visits_sqrt;
+
+        int bestIdx = -1;
+        double bestVal = -std::numeric_limits<double>::infinity();
+
+        // 2. Loop
+        for (int i = 0; i < (int)node->children.size(); ++i) {
+            const ChildEntry &e = node->children[i];
+
+            // OPTIMIZATION: Check First-Play Urgency (FPU)
+            // If a node has never been visited, avoid the division logic entirely.
+            if (e.N == 0) {
+                // Treat unvisited nodes as having a specific value (e.g., parent Q or infinite)
+                // This ensures highly rated Policy moves are visited first without math errors.
+                double fpu_val = 1000.0 + e.P; // Simple "Infinity" approach
+                if (fpu_val > bestVal) {
+                    bestVal = fpu_val;
+                    bestIdx = i;
+                }
+                continue;
+            }
+
+            // Standard PUCT
+            // We hoist the division: multiplication by reciprocal is often faster
+            double q = e.W / e.N;
+            double u = exploration_factor * (e.P / (1 + e.N));
+
+            if (q + u > bestVal) {
+                bestVal = q + u;
+                bestIdx = i;
+            }
         }
-        return node;
+        return bestIdx;
     }
 
-    // --- EXPANSION ---
-    // Adds ONE new child to the tree.
-    Node* expand(Node* node, Position& pos) {
-        if (node->unexpanded_moves.empty()) return node; // Should not happen given logic above
+    // Expansion: populate children with legal moves and priors.
+    // If priors is empty, uniform is used.
+    void expandNode(Node* node, const Position& pos,
+                    const std::vector<double>& priors)
+    {
+        std::vector<int> legal = pos.getLegalMoves();
 
-        // 1. Pick a random move from the unexpanded list
-        // This avoids bias in the expansion order
-        int idx = mcts_rng.range(node->unexpanded_moves.size());
-        int move = node->unexpanded_moves[idx];
+        node->children.clear();
+        node->children.reserve(legal.size());
 
-        // 2. Efficiently remove from list (Swap with back + pop)
-        node->unexpanded_moves[idx] = node->unexpanded_moves.back();
-        node->unexpanded_moves.pop_back();
+        double sumP = 0.0;
 
-        // 3. Update the scratch board
-        pos.makeMove(move);
+        for (int mv : legal) {
+            double p = 1.0;
+            if (!priors.empty() && (size_t)mv < priors.size()) p = priors[mv];
 
-        // 4. Create the new node
-        // pos.sideToMove ^ 1 is the player who just made this move
-        Node* newChild = new Node(move, pos.sideToMove ^ 1, node, pos);
-        node->children.push_back(newChild);
+            node->children.push_back(ChildEntry{mv, nullptr, p, 0, 0.0});
+            sumP += p;
+        }
 
-        return newChild;
+        if (sumP <= 0.0) {
+            double u = 1.0 / std::max<size_t>(1, legal.size());
+            for (auto &c : node->children) c.P = u;
+        } else {
+            for (auto &c : node->children) c.P /= sumP;
+        }
+
+        node->expanded = true;
     }
 
-    // --- SIMULATION ---
-    // Pure random rollout using your optimized PDEP/DSU code
+
+    // Rollout simulation (placeholder until CNN value head)
     int simulate(Position& pos) {
-        // If the game ended during selection/expansion (e.g. instant win), return immediately
-        int initial_winner = pos.getWinner();
-        if (initial_winner != -1) return initial_winner;
+        int immediate = pos.getWinner();
+        if (immediate != -1) return immediate;
 
-        // Run until game over
-        // We assume your makeRandomRolloutMove handles move limit/draws internally if needed
         while (true) {
-            // Use the position's internal RNG or pass one in if needed
-            // pos.makeRandomRolloutMove expects FastRand&.
-            // We reuse mcts_rng for simplicity, or create a local one.
-            // Using mcts_rng is fine since MCTS is single-threaded here.
             pos.makeRandomRolloutMove(mcts_rng);
 
-            // Check ONLY the active player for efficiency (Optimization #2)
-            // makeMove flipped the turn, so we check the player who just moved
             int just_moved = pos.sideToMove ^ 1;
-
-            // Check DSU for that player
             if (pos.dsus[just_moved].isConnected(V_START, V_END)) {
                 return just_moved;
             }
-
-            // Safety check for full board (Draw)
-            if (pos.moveCount >= BOARD_AREA) return 2;
+            if (pos.moveCount >= BOARD_AREA) return 2; // draw (rare in Hex)
         }
     }
 
-    // --- BACKPROPAGATION ---
-    void backpropagate(Node* node, int winner) {
-        while (node != nullptr) {
-            node->visits++;
 
-            // Standard MCTS Scoring:
-            // If the winner matches the player who made the move at this node,
-            // it's a win for this node.
-            if (winner == node->player_just_moved) {
-                node->score += 1.0;
-            } else if (winner == 2) {
-                // Draw (rare/impossible in Hex)
-                node->score += 0.5;
-            }
-            // Loss adds 0.0
+    // Backpropagation: update edge statistics (N, W) along path
+    void backpropagate(const std::vector<std::pair<Node*, int>>& path,
+                       Node* leafNode,
+                       int winner)
+    {
+        // Update edges from leaf to root
+        for (auto it = path.rbegin(); it != path.rend(); ++it) {
+            Node* parent = it->first;
+            int idx = it->second;
 
-            node = node->parent;
+            if (idx < 0 || idx >= (int)parent->children.size()) continue;
+
+            ChildEntry &edge = parent->children[idx];
+            edge.N += 1;
+
+            int player_who_moved =
+                edge.child ? edge.child->player_just_moved
+                           : (parent->player_just_moved ^ 1);
+
+            if (winner == player_who_moved) edge.W += 1.0;
+            else if (winner == 2) edge.W += 0.5;
+
+            parent->visits += 1;
+        }
+
+        Node* cur = leafNode;
+        while (cur) {
+            cur->visits += 1;
+            cur = cur->parent;
         }
     }
+};
 
-    // --- UCT HELPER ---
-    Node* getBestUCTChild(Node* node) {
-        Node* bestChild = nullptr;
-        double bestValue = -std::numeric_limits<double>::max();
+} // namespace engine
 
-        // Pre-calculate log(N)
-        double logParent = std::log(node->visits);
-
-        for (Node* child : node->children) {
-            // UCT Formula: (Wins / Visits) + C * sqrt(log(ParentVisits) / Visits)
-            double exploitation = child->score / child->visits;
-            double exploration  = C_PARAM * std::sqrt(logParent / child->visits);
-
-            double uct = exploitation + exploration;
-
-            if (uct > bestValue) {
-                bestValue = uct;
-                bestChild = child;
-            }
-        }
-        return bestChild;
-    }
-    };
-}
-#endif //GROUP49_MCTS_H
+#endif // GROUP49_MCTS_H
