@@ -8,39 +8,53 @@
 #include <array>
 #include <iostream>
 #include <utility>
+#include <memory>
+#include <thread>
+#include <mutex>
+#include <atomic>
 
 #include "Position.h"
 #include "Util.h"
+#include "InferenceServer.h"
 
 namespace engine {
 
-struct Node; // Forward declaration
+struct Node;
 
-
-// ChildEntry: statistics stored on the edge parent → child
+// ChildEntry: statistics stored on the edge parent -> child
 struct ChildEntry {
-    int move = -1;          // Move index (0..BOARD_AREA-1)
-    Node* child = nullptr;  // Created lazily during selection/expansion
-    double P = 0.0;         // Prior probability from policy network (or uniform)
-    int N = 0;              // Visit count
-    double W = 0.0;         // Total accumulated value
-    double Q() const { return N ? (W / N) : 0.0; }
+    int move = -1;
+    Node* child = nullptr;
+    double P = 0.0;
+
+    // Stats are now protected by the Parent Node's mutex
+    int N = 0;
+    double W = 0.0;
+    int virtualLoss = 0;    // [New] Tracks pending threads on this edge
+
+    // Q-Value with Virtual Loss
+    // We treat virtual losses as if they were visits with a losing value (-1.0)
+    double Q(double virtualLossWeight = 1.0) const {
+        int effectiveN = N + virtualLoss;
+        if (effectiveN == 0) return 0.0;
+
+        // Subtract virtual loss from W (assuming W is relative perspective)
+        // Effectively dragging the average down temporarily
+        double effectiveW = W - (virtualLoss * virtualLossWeight);
+        return effectiveW / effectiveN;
+    }
 };
 
-
-// Node: represents a position reached by move_from_parent
-// Edge statistics live in ChildEntry, not in Node itself.
 struct Node {
-    int move_from_parent = -1;    // Move that created this node (root = -1)
-    int player_just_moved = -1;   // Player who played move_from_parent
     Node* parent = nullptr;
+    std::vector<ChildEntry> children;
+    bool expanded = false;
+    int visits = 0; // Total visits through this node
 
-    std::vector<ChildEntry> children; // One entry per legal move after expansion
-    bool expanded = false;            // Becomes true after expandNode()
-    int visits = 0;                   // Number of visits to this node
+    // [New] Mutex to protect 'children' stats and 'expanded' state during concurrent access
+    std::mutex mutex;
 
-    Node(int mv = -1, int player = -1, Node* p = nullptr)
-        : move_from_parent(mv), player_just_moved(player), parent(p) {}
+    Node(Node* p = nullptr) : parent(p) {}
 
     ~Node() {
         for (auto &ce : children) {
@@ -48,249 +62,228 @@ struct Node {
             ce.child = nullptr;
         }
     }
-
-    bool isFullyExpanded() const {
-        if (!expanded) return false;
-        for (const auto &ce : children) {
-            if (ce.move >= 0 && ce.child == nullptr)
-                return false;
-        }
-        return true;
-    }
 };
 
-
-// SearchResult: returned by searchWithPolicy()
-// policy[i] = normalized visit count for move i
 struct SearchResult {
     int bestMove = -1;
     std::array<double, BOARD_AREA> policy{};
+    float rootValue = 0.0f;
 };
 
-
-// MCTS CLASS
 class MCTS {
 public:
-    double cpuct = 1.0;   // PUCT exploration constant
-
-    FastRand mcts_rng;
+    double cpuct = 1.0;
+    double virtualLossWeight = 1.0; // Penalty strength for parallel paths
 
     MCTS() = default;
     ~MCTS() = default;
 
-    // Returns a move chosen by most visits
-    int search(const Position& rootPos, int iterations) {
-        return searchWithPolicy(rootPos, iterations).bestMove;
-    }
+    // Main Search Entry Point
+    SearchResult searchWithPolicy(const Position& rootPos, InferenceServer& server, int totalIterations) {
+        Node* root = new Node(nullptr);
 
-    // Runs MCTS and returns move + visit distribution
-    SearchResult searchWithPolicy(const Position& rootPos, int iterations) {
-        Node* root = new Node(-1, rootPos.sideToMove ^ 1, nullptr);
+        // 1. Initial Root Expansion (Single-threaded)
+        auto [rootPolicy, rootVal] = server.evaluate(rootPos);
+        expandNode(root, rootPos, rootPolicy);
 
-        for (int it = 0; it < iterations; ++it) {
-            Position pos = rootPos;
+        // 2. Determine Thread Count
+        // Use hardware concurrency, or match your Batch Size (e.g., 32)
+        int numThreads = std::thread::hardware_concurrency();
+        if (numThreads == 0) numThreads = 1;
 
-            // -------------------
-            // Selection
-            // -------------------
-            std::vector<std::pair<Node*, int>> path;
-            Node* node = root;
+        // Ensure at least 1 iteration per thread
+        if (numThreads > totalIterations) numThreads = totalIterations;
 
-            while (node->expanded && !isTerminalPosition(pos)) {
-                int idx = select_puct(node);
-                if (idx < 0 || idx >= (int)node->children.size()) break;
+        std::vector<std::thread> threads;
+        std::atomic<int> iterationsCounter{0};
 
-                int mv = node->children[idx].move;
-                pos.makeMove(mv);
+        // 3. Spawn Workers
+        for (int i = 0; i < numThreads; ++i) {
+            threads.emplace_back([&]() {
+                while (true) {
+                    // Claim an iteration
+                    int it = iterationsCounter.fetch_add(1);
+                    if (it >= totalIterations) break;
 
-                if (!node->children[idx].child) {
-                    node->children[idx].child =
-                        new Node(mv, pos.sideToMove ^ 1, node);
+                    worker_step(root, rootPos, server);
                 }
-
-                path.emplace_back(node, idx);
-                node = node->children[idx].child;
-            }
-
-            // -------------------
-            // Expansion + Evaluation
-            // -------------------
-            int winner = -1;
-            if (isTerminalPosition(pos)) {
-                winner = pos.getWinner();
-            } else {
-                // TODO: Replace uniform priors + rollout with CNN-based priors + value.
-                std::vector<double> priors; // empty → uniform priors
-                expandNode(node, pos, priors);
-
-                // Rollout value (placeholder until CNN integration)
-                winner = simulate(pos);
-            }
-
-            // -------------------
-            // Backpropagation
-            // -------------------
-            backpropagate(path, node, winner);
+            });
         }
 
-        // -------------------
-        // Build final policy
-        // -------------------
-        SearchResult result;
-        result.policy.fill(0.0);
-
-        if (!root->expanded) {
-            Position tmp = rootPos;
-            expandNode(root, tmp, std::vector<double>{}); // uniform
+        // 4. Wait for completion
+        for (auto& t : threads) {
+            if (t.joinable()) t.join();
         }
 
-        double totalN = 0.0;
-        int bestMove = -1;
-        int bestN = -1;
-
-        for (const auto &ce : root->children) {
-            result.policy[ce.move] = ce.N;
-            totalN += ce.N;
-            if (ce.N > bestN) {
-                bestN = ce.N;
-                bestMove = ce.move;
-            }
-        }
-
-        if (totalN > 0) {
-            for (double &v : result.policy) v /= totalN;
-        }
-
-        result.bestMove = bestMove;
+        // 5. Build Result
+        SearchResult result = buildResult(root);
         delete root;
         return result;
     }
 
 private:
-    // Terminal detection using Position API
-    bool isTerminalPosition(const Position& pos) {
-        return pos.getWinner() != -1;
-    }
+    // The core loop for a single thread
+    void worker_step(Node* root, Position pos, InferenceServer& server) {
+        Node* node = root;
+        std::vector<int> pathIndices;
 
+        // --- 1. SELECTION ---
+        while (true) {
+            std::unique_lock<std::mutex> lock(node->mutex);
 
-    // Selection: choose child index by PUCT formula
-    int select_puct(Node* node) {
-        // 1. Pre-calculate the constant part of the U-term
-        // Sum of visits is usually just the parent's visit count (minus 1)
-        double parent_visits_sqrt = std::sqrt(std::max(1.0, (double)node->visits - 1));
-        double exploration_factor = cpuct * parent_visits_sqrt;
-
-        int bestIdx = -1;
-        double bestVal = -std::numeric_limits<double>::infinity();
-
-        // 2. Loop
-        for (int i = 0; i < (int)node->children.size(); ++i) {
-            const ChildEntry &e = node->children[i];
-
-            // OPTIMIZATION: Check First-Play Urgency (FPU)
-            // If a node has never been visited, avoid the division logic entirely.
-            if (e.N == 0) {
-                // Treat unvisited nodes as having a specific value (e.g., parent Q or infinite)
-                // This ensures highly rated Policy moves are visited first without math errors.
-                double fpu_val = 1000.0 + e.P; // Simple "Infinity" approach
-                if (fpu_val > bestVal) {
-                    bestVal = fpu_val;
-                    bestIdx = i;
-                }
-                continue;
+            if (!node->expanded || pos.getLegalMoves().empty()) {
+                // Leaf reached
+                break;
             }
 
-            // Standard PUCT
-            // We hoist the division: multiplication by reciprocal is often faster
-            double q = e.W / e.N;
-            double u = exploration_factor * (e.P / (1 + e.N));
+            int idx = select_puct(node);
 
-            if (q + u > bestVal) {
-                bestVal = q + u;
+            if (idx < 0 || idx >= (int)node->children.size()) break;
+
+            ChildEntry& entry = node->children[idx];
+
+            // Apply Virtual Loss (Atomic via Lock)
+            entry.virtualLoss++;
+            node->visits++; // Increment parent visits speculatively
+
+            pos.makeMove(entry.move);
+            pathIndices.push_back(idx);
+
+            // Lazy Child Creation
+            if (!entry.child) {
+                entry.child = new Node(node);
+            }
+            Node* nextNode = entry.child;
+
+            lock.unlock(); // Release lock before descending
+            node = nextNode;
+        }
+
+        // --- 2. EVALUATION & EXPANSION ---
+        float value = 0.0f;
+        int winner = pos.getWinner();
+
+        if (winner != -1) {
+            value = (winner == pos.sideToMove) ? 1.0f : -1.0f;
+        } else {
+            // Blocking Call to Server
+            auto result = server.evaluate(pos);
+            const std::vector<float>& policy = result.first;
+            value = result.second;
+
+            // Expand under lock
+            std::lock_guard<std::mutex> lock(node->mutex);
+            if (!node->expanded) {
+                expandNode(node, pos, policy);
+            }
+        }
+
+        // --- 3. BACKPROPAGATION ---
+        backpropagate(root, pathIndices, value);
+    }
+
+    int select_puct(Node* node) {
+        // NOTE: This function assumes the caller holds node->mutex
+        int bestIdx = -1;
+        double bestScore = -std::numeric_limits<double>::infinity();
+        double sqrtVisits = std::sqrt(node->visits);
+
+        for (int i = 0; i < (int)node->children.size(); ++i) {
+            const ChildEntry& e = node->children[i];
+
+            // Use Q with Virtual Loss penalty
+            double Q_val = e.Q(virtualLossWeight);
+
+            // FPU: First Play Urgency
+            if (e.N + e.virtualLoss == 0) {
+                 Q_val = 0.0;
+            }
+
+            // Exploration Term (using effective N)
+            double U_val = cpuct * e.P * sqrtVisits / (1.0 + e.N + e.virtualLoss);
+
+            double score = Q_val + U_val;
+
+            if (score > bestScore) {
+                bestScore = score;
                 bestIdx = i;
             }
         }
         return bestIdx;
     }
 
-    // Expansion: populate children with legal moves and priors.
-    // If priors is empty, uniform is used.
-    void expandNode(Node* node, const Position& pos,
-                    const std::vector<double>& priors)
-    {
+    void expandNode(Node* node, const Position& pos, const std::vector<float>& policy_full) {
+        // NOTE: Caller must hold lock if multithreaded (worker_step does)
         std::vector<int> legal = pos.getLegalMoves();
-
-        node->children.clear();
         node->children.reserve(legal.size());
 
         double sumP = 0.0;
-
         for (int mv : legal) {
-            double p = 1.0;
-            if (!priors.empty() && (size_t)mv < priors.size()) p = priors[mv];
-
-            node->children.push_back(ChildEntry{mv, nullptr, p, 0, 0.0});
+            double p = 0.0;
+            if (mv >= 0 && mv < (int)policy_full.size()) p = policy_full[mv];
+            node->children.push_back({mv, nullptr, p, 0, 0.0, 0}); // Init virtualLoss=0
             sumP += p;
         }
 
-        if (sumP <= 0.0) {
-            double u = 1.0 / std::max<size_t>(1, legal.size());
-            for (auto &c : node->children) c.P = u;
+        if (sumP > 1e-9) {
+            for (auto& ce : node->children) ce.P /= sumP;
         } else {
-            for (auto &c : node->children) c.P /= sumP;
+            double uniform = 1.0 / legal.size();
+            for (auto& ce : node->children) ce.P = uniform;
         }
-
         node->expanded = true;
     }
 
+    void backpropagate(Node* root, const std::vector<int>& pathIndices, float leafValue) {
+        double valueForParent = -leafValue;
 
-    // Rollout simulation (placeholder until CNN value head)
-    int simulate(Position& pos) {
-        int immediate = pos.getWinner();
-        if (immediate != -1) return immediate;
+        Node* node = root;
+        // Root visits were incremented during Selection, so we don't do it here
+        // or we need to be careful not to double count.
+        // In this implementation, we incremented speculatively in Selection.
 
-        while (true) {
-            pos.makeRandomRolloutMove(mcts_rng);
+        for (int idx : pathIndices) {
+            std::lock_guard<std::mutex> lock(node->mutex);
 
-            int just_moved = pos.sideToMove ^ 1;
-            if (pos.dsus[just_moved].isConnected(V_START, V_END)) {
-                return just_moved;
-            }
-            if (pos.moveCount >= BOARD_AREA) return 2; // draw (rare in Hex)
+            ChildEntry& edge = node->children[idx];
+
+            // Remove Virtual Loss
+            edge.virtualLoss--;
+
+            // Update Real Stats
+            edge.N++;
+            edge.W += valueForParent;
+
+            node = edge.child;
+            valueForParent = -valueForParent;
         }
     }
 
+    SearchResult buildResult(Node* root) {
+        SearchResult result;
+        result.policy.fill(0.0);
+        double totalN = 0.0;
+        int bestMove = -1;
+        int maxN = -1;
 
-    // Backpropagation: update edge statistics (N, W) along path
-    void backpropagate(const std::vector<std::pair<Node*, int>>& path,
-                       Node* leafNode,
-                       int winner)
-    {
-        // Update edges from leaf to root
-        for (auto it = path.rbegin(); it != path.rend(); ++it) {
-            Node* parent = it->first;
-            int idx = it->second;
-
-            if (idx < 0 || idx >= (int)parent->children.size()) continue;
-
-            ChildEntry &edge = parent->children[idx];
-            edge.N += 1;
-
-            int player_who_moved =
-                edge.child ? edge.child->player_just_moved
-                           : (parent->player_just_moved ^ 1);
-
-            if (winner == player_who_moved) edge.W += 1.0;
-            else if (winner == 2) edge.W += 0.5;
-
-            parent->visits += 1;
+        // No lock needed here as threads are joined
+        for (const auto& ce : root->children) {
+            result.policy[ce.move] = ce.N;
+            totalN += ce.N;
+            if (ce.N > maxN) {
+                maxN = ce.N;
+                bestMove = ce.move;
+            }
         }
+        if (totalN > 0) {
+            for (double& p : result.policy) p /= totalN;
 
-        Node* cur = leafNode;
-        while (cur) {
-            cur->visits += 1;
-            cur = cur->parent;
+            double rootW = 0.0;
+            for (const auto& ce : root->children) rootW += ce.W;
+            result.rootValue = (float)(rootW / totalN);
         }
+        result.bestMove = bestMove;
+        return result;
     }
 };
 

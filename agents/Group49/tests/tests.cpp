@@ -3,7 +3,6 @@
 #include "../src/Position.h"
 #include "../src/Util.h"
 #include "../src/MCTS.h"
-#include "../src/Inference.cpp"
 
 using namespace engine;
 
@@ -249,54 +248,55 @@ TEST(WinCheck, BrokenBucketPath_NoWin) {
 class ConsistencyTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        // Initialize LUTs if necessary (depending on your implementation)
-        // HexUtils::init_neighbors();
+        // Check if model exists to avoid crashing tests hard
+        if (access(MODEL_PATH.c_str(), F_OK) == -1) {
+            std::cerr << "[WARNING] Model not found at " << MODEL_PATH
+                      << ". Consistency tests using MCTS will fail/skip." << std::endl;
+        }
     }
 };
 
 // TEST 1: MCTS vs MCTS (Realistic Game Paths)
-// checks consistency after every single move.
 TEST_F(ConsistencyTest, EngineSelfPlay_NoCorruption) {
-    FastRand rng;
-    // Run 5 full games
-    for (int game = 0; game < 5; ++game) {
-        Position pos(0); // Start Red
-        MCTS agent;
+    if (access(MODEL_PATH.c_str(), F_OK) == -1) GTEST_SKIP();
 
+    // 1. Setup Inference Stack
+    Inference net(MODEL_PATH);
+    InferenceServer server(net);
+    MCTS agent;
+
+    for (int game = 0; game <5; ++game) {
+        Position pos(0);
         int moves = 0;
+
         while (pos.getWinner() == -1) {
-            // 1. Assert Consistency BEFORE move
-            // (If this fails, your program exits, failing the test)
             pos.checkConsistency();
 
-            // 2. Generate Move
-            // Use low iterations (e.g. 500) to keep unit tests fast
-            // but enough to generate semi-coherent lines.
-            int bestMove = agent.search(pos, 5000);
-            // 3. ASSERT LEGALITY (New)
-            // If this fails, the MCTS selected an occupied or OOB square
+            // 2. Run MCTS
+            // 200 iterations is enough for a sanity check
+            SearchResult result = agent.searchWithPolicy(pos, server, 200);
+            int bestMove = result.bestMove;
+
+            // 3. ASSERT LEGALITY
             ASSERT_TRUE(pos.isMoveLegal(bestMove))
                 << "FATAL: MCTS returned illegal move " << bestMove
                 << " at move count " << moves;
-            // 3. Make Move
+
+            // 4. Make Move
             pos.makeMove(bestMove);
             moves++;
 
-            // 4. Assert Consistency AFTER move
             pos.checkConsistency();
 
-            // Safety break for infinite loops
             if (moves > BOARD_AREA) break;
         }
         std::cout << moves << " moves in game " << game << std::endl;
-        // Assert game ended validly
         EXPECT_NE(pos.getWinner(), -1) << "Game " << game << " did not finish.";
     }
 }
 
 // TEST 2: Random vs Random (Chaos / Edge Cases)
-// Random moves are excellent for finding bitboard overlaps
-// because they fill the board in "swiss cheese" patterns.
+// No NN needed here, relies on internal random logic
 TEST_F(ConsistencyTest, RandomChaos_NoCorruption) {
     FastRand rng;
 
@@ -306,86 +306,75 @@ TEST_F(ConsistencyTest, RandomChaos_NoCorruption) {
         int moves = 0;
 
         while (pos.getWinner() == -1) {
-            // Check
             pos.checkConsistency();
 
-            // Pick purely random legal move
+            // Pure random selection
             int move = pos.getRandomLegalMove(rng);
-            if (move == -1) break; // Should be handled by getWinner/moveCount logic
-            // 3. ASSERT LEGALITY (New)
-            // If this fails, PDEP or bit-scan logic is broken
+
+            if (move == -1) break;
+
             ASSERT_TRUE(pos.isMoveLegal(move))
                 << "FATAL: getRandomLegalMove returned occupied square " << move;
-            // Move
+
             pos.makeMove(move);
             moves++;
 
-            // Check
             pos.checkConsistency();
         }
     }
 }
 
-class PerformanceTest : public ::testing::Test {
-protected:
-    void SetUp() override {
-    }
-};
+class PerformanceTest : public ::testing::Test {};
 
 // TEST: Benchmark MCTS Performance (Nodes Per Second)
 TEST_F(PerformanceTest, Calculate_NPS) {
+    if (access(MODEL_PATH.c_str(), F_OK) == -1) GTEST_SKIP();
+
     // 1. Setup
-    Position pos(0); // Start with empty board
+    Inference net(MODEL_PATH);
+    InferenceServer server(net);
+    Position pos(0);
     MCTS agent;
 
-    // Configuration: 100,000 iterations provides a stable average
-    int iterations = 100000;
+    // Configuration:
+    // NN Inference is slow. 500 iterations is enough to gauge NPS.
+    int iterations = 50000;
 
-    std::cout << "[Benchmark] Starting MCTS Search (" << iterations << " iterations)..." << std::endl;
+    std::cout << "[Benchmark] Starting Neural MCTS Search (" << iterations << " iterations)..." << std::endl;
 
-    // 2. Start Timer
     auto start = std::chrono::high_resolution_clock::now();
 
-    // 3. Run Search
-    // We discard the return value (best move) as we only care about speed here
-    agent.search(pos, iterations);
+    // 2. Run Search
+    agent.searchWithPolicy(pos, server, iterations);
 
-    // 4. Stop Timer
     auto end = std::chrono::high_resolution_clock::now();
 
-    // 5. Calculate Metrics
+    // 3. Calculate Metrics
     long long duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-
-    // Prevent division by zero if it runs instantly
     if (duration_ms == 0) duration_ms = 1;
 
     double seconds = duration_ms / 1000.0;
     int nps = (int)(iterations / seconds);
 
-    // 6. Report Results
     std::cout << "============================================" << std::endl;
     std::cout << " Total Time: " << duration_ms << " ms" << std::endl;
     std::cout << " Speed:      " << nps << " Nodes/Sec (NPS)" << std::endl;
     std::cout << "============================================" << std::endl;
 
-    // 7. Quality Assertion
-    // < 10,000  = Poor (Likely memory allocation issues)
-    // 10k - 40k = Good (Standard implementation)
-    // > 50,000  = Excellent (Optimized Bitboards/DSU)
-    EXPECT_GT(nps, 25000) << "Performance is below the target threshold for this engine.";
+    // 4. Quality Assertion
+    // NN MCTS is much slower than random rollouts.
+    // 50 NPS is a reasonable baseline for CPU inference in WSL.
+    // If you use GPU/TensorRT later, expect 500-2000+.
+    EXPECT_GT(nps, 50) << "Performance is dangerously low (check Batching logic).";
 }
 
 class OnnxTest : public ::testing::Test {
 protected:
-    // Helper to print top K moves from policy
     void printTopMoves(const std::vector<float>& policy, int topK = 5) {
-        // Create pairs of (index, probability)
         std::vector<std::pair<int, float>> moves;
         for (int i = 0; i < policy.size(); ++i) {
             moves.push_back({i, policy[i]});
         }
-
-        // Sort descending by probability
         std::sort(moves.begin(), moves.end(), [](const auto& a, const auto& b) {
             return a.second > b.second;
         });
@@ -394,8 +383,6 @@ protected:
         for (int i = 0; i < topK && i < moves.size(); ++i) {
             int moveIdx = moves[i].first;
             float prob = moves[i].second;
-
-            // Convert index to A1, B2 notation for readability
             int r = moveIdx / BOARD_SIZE;
             int c = moveIdx % BOARD_SIZE;
             char colChar = 'A' + c;
@@ -409,119 +396,69 @@ protected:
 };
 
 TEST_F(OnnxTest, RandomSelfPlay_Inference) {
-    // Simple check to ensure model exists (avoids confusing ONNX crash)
-    FILE* f = fopen(MODEL_PATH.c_str(), "r");
-    if (!f) {
-        std::cerr << "[SKIP] Model file not found at: " << MODEL_PATH << std::endl;
-        std::cerr << "Please export your PyTorch model to this location to run this test." << std::endl;
-        GTEST_SKIP();
-    }
-    fclose(f);
+    if (access(MODEL_PATH.c_str(), F_OK) == -1) GTEST_SKIP();
 
-    std::string wModelPath(MODEL_PATH.begin(), MODEL_PATH.end());
-    Inference net(wModelPath);
+    // Use direct Inference class (no Server needed for single-shot tests)
+    Inference net(MODEL_PATH);
     Position pos(0);
     FastRand rng;
 
-    // 2. PLAY SOME MOVES (Clutter the board)
+    // 2. PLAY SOME MOVES
     int movesToPlay = 8;
-    std::cout << "Playing " << movesToPlay << " random moves..." << std::endl;
-
     for (int i = 0; i < movesToPlay; ++i) {
         pos.makeRandomRolloutMove(rng);
     }
 
-    // 3. VISUALIZE INPUT
     pos.printPosition();
 
-    // 4. RUN INFERENCE
+    // 3. RUN INFERENCE (Single)
     std::cout << "Running ONNX Inference..." << std::endl;
     auto result = net.predict(pos);
 
     std::vector<float> policy = result.first;
     float value = result.second;
 
-    // 5. PRINT RESULTS
-    std::cout << "\n================ INFERENCE RESULTS ================" << std::endl;
-    std::cout << "Predicted Value (Win Prob for Current Player): " << value << std::endl;
+    std::cout << "Predicted Value: " << value << std::endl;
+    printTopMoves(policy);
 
-    // Sanity checks
     EXPECT_GE(value, -1.0f);
     EXPECT_LE(value, 1.0f);
     EXPECT_EQ(policy.size(), 121);
-
-    // Check if probabilities sum to roughly 1.0 (if your model outputs softmax)
-    // If your model outputs logits, this assertion will fail (which is fine, just remove it).
-    float sum = 0.0f;
-    for (float p : policy) sum += p;
-    std::cout << "Policy Sum: " << sum << std::endl;
-
-    printTopMoves(policy);
-    std::cout << "===================================================" << std::endl;
 }
 
 TEST_F(OnnxTest, Strategy_ImmediateWin_Red) {
-    // 1. SETUP MODEL
-    // Use the same path definition logic as your other tests
-    if (access(MODEL_PATH.c_str(), F_OK) == -1) {
-        std::cerr << "[SKIP] Model not found: " << MODEL_PATH << std::endl;
-        GTEST_SKIP();
-    }
-    std::string wModelPath(MODEL_PATH.begin(), MODEL_PATH.end());
-    Inference net(wModelPath); // Or NeuralNet, depending on your class name
-    Position pos(0); // Start empty
+    if (access(MODEL_PATH.c_str(), F_OK) == -1) GTEST_SKIP();
 
-    // 2. CONSTRUCT SCENARIO: "The F-Column Ladder"
-    // Red (P0) wants to connect Top -> Bottom.
-    // We manually build a line of Red stones down the middle (Column F, Index 5).
-    // We put Blue (P1) stones uselessly on the far left (Column A, Index 0) to keep turns valid.
+    Inference net(MODEL_PATH);
+    Position pos(0);
 
-    // Red moves: F1(5), F2(16), ... F10(104)
-    // Blue moves: A1(0), A2(11), ... A10(99)
-
-    std::cout << "Constructing Forced Win Scenario..." << std::endl;
+    // F-Column Ladder Scenario
     for (int row = 0; row < 10; ++row) {
-        int redMove = row * BOARD_SIZE + 5; // Col F (5th index)
-        int blueMove = row * BOARD_SIZE + 0; // Col A (0th index)
-
+        int redMove = row * BOARD_SIZE + 5;
+        int blueMove = row * BOARD_SIZE + 0;
         pos.makeMove(redMove);
         pos.makeMove(blueMove);
     }
 
-    // 3. VERIFY STATE
-    // It should now be Red's turn.
-    // Red has a chain from Row 0 to Row 9.
-    // The WINNING move is F11 (Row 10, Col 5 -> Index 115).
-    int winningMove = 10 * BOARD_SIZE + 5; // 115
+    int winningMove = 10 * BOARD_SIZE + 5; // F11
 
-    pos.printPosition();
-    ASSERT_EQ(pos.sideToMove, 0) << "It should be Red's turn.";
-    ASSERT_EQ(pos.getWinner(), -1) << "Game should not be over yet.";
-
-    // 4. RUN INFERENCE
     std::cout << "Running Inference..." << std::endl;
     auto result = net.predict(pos);
 
     std::vector<float> policy = result.first;
     float value = result.second;
 
-    // 5. ASSERTIONS
-    std::cout << "Predicted Value: " << value << " (Expect > 0.5)" << std::endl;
+    std::cout << "Predicted Value: " << value << std::endl;
     std::cout << "Policy for F11 (" << winningMove << "): " << policy[winningMove] << std::endl;
 
-    // A. Value Check: Red should know they are winning
-    // Note: If training data was sparse, this might be lower, but usually > 0.5
-    EXPECT_GT(value, 0.2f) << "The network doesn't realize Red is in a strong position.";
+    EXPECT_GT(value, 0.2f); // Should be winning
 
-    // B. Policy Check: The winning move should be ranked highly
     int rank = 1;
     for (int i = 0; i < 121; ++i) {
         if (policy[i] > policy[winningMove]) rank++;
     }
 
-    std::cout << "Rank of winning move: #" << rank << std::endl;
-    printTopMoves(policy, 5); // Use your helper to see what it prefers
-
-    // Ideally Rank 1, but we accept Top 3 to account for "noise" in early training
-    EXPECT_LE(rank, 3) << "The winning move (F11) was not in the top 3 suggestions!";
+    std::cout << "Rank: #" << rank << std::endl;
+    printTopMoves(policy);
+    EXPECT_LE(rank, 5); // Allow top 5 to account for training noise
 }

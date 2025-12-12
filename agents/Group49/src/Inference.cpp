@@ -2,80 +2,95 @@
 #include <vector>
 #include <array>
 #include <iostream>
+#include <cmath>
+#include <algorithm>
 #include "Position.h"
-
-// Adjust to match your model's expected input
-// Example: Batch Size 1, 3 Channels (Red, Blue, Color), 11x11 Board
-const int64_t BATCH_SIZE = 1;
-const int64_t CHANNELS = 3; 
-const int64_t HEIGHT = 11;
-const int64_t WIDTH = 11;
-const int64_t INPUT_SIZE = BATCH_SIZE * CHANNELS * HEIGHT * WIDTH;
 
 class Inference {
     Ort::Env env;
     Ort::Session session{nullptr};
-    
-    // Memory Info for allocating tensors (CPU)
     Ort::MemoryInfo memory_info;
 
-    // Fixed Input/Output Names (Must match your Python export!)
+    // Fixed Input/Output Names
     const char* input_names[1] = {"state"};
     const char* output_names[2] = {"policy", "value"};
 
+
 public:
     Inference(const std::string& model_path)
-        : env(ORT_LOGGING_LEVEL_WARNING, "HexBot"),
-          memory_info(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault)) 
+        : env(ORT_LOGGING_LEVEL_ERROR, "HexBot"),
+          memory_info(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault))
     {
-        // 1. Configure Session Options (Graph Optimization)
         Ort::SessionOptions session_options;
-        session_options.SetIntraOpNumThreads(1); // 1 Thread per inference (we parallelize via batching)
+        session_options.SetIntraOpNumThreads(1);
+        OrtSessionOptionsAppendExecutionProvider_CUDA(session_options, 0);
         session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
-        // 2. Load Model
-        // Note: On Windows use std::wstring for paths, Linux use std::string
         session = Ort::Session(env, model_path.c_str(), session_options);
+
     }
 
-    // Returns {Policy Vector (121 floats), Value (float)}
+    // --- EXISTING SINGLE PREDICT (Optional, kept for tests) ---
     std::pair<std::vector<float>, float> predict(const engine::Position& pos) {
-        
-        // --- STEP 1: PREPARE INPUT ---
-        // 1. Get the data directly from the position
-        std::vector<float> input_tensor_values = pos.toTensor();
+        return predictBatch({pos})[0]; // Reuse the batch logic!
+    }
 
-        // 2. Create the ONNX Tensor wrapper
-        std::array<int64_t, 4> input_shape = {1, 6, 11, 11};
+    // --- NEW: BATCH PREDICTION ---
+    // Used by InferenceServer to process multiple positions at once
+    std::vector<std::pair<std::vector<float>, float>> predictBatch(const std::vector<engine::Position>& positions) {
+        size_t batch_size = positions.size();
+        if (batch_size == 0) return {};
+
+        // 1. FLATTEN INPUTS
+        // We need a contiguous vector of: [Pos1_Ch1..Ch6, Pos2_Ch1..Ch6, ...]
+        std::vector<float> input_data;
+        // Reserve memory: N * 6 * 11 * 11
+        input_data.reserve(batch_size * 6 * 121);
+
+        for (const auto& pos : positions) {
+            std::vector<float> tensor = pos.toTensor(); // Returns 6*121 floats
+            input_data.insert(input_data.end(), tensor.begin(), tensor.end());
+        }
+
+        // 2. CREATE TENSOR WITH DYNAMIC SHAPE
+        // Shape: [BatchSize, 6, 11, 11]
+        std::array<int64_t, 4> input_shape = { (int64_t)batch_size, 6, 11, 11 };
 
         Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
             memory_info,
-            input_tensor_values.data(),
-            input_tensor_values.size(),
+            input_data.data(),
+            input_data.size(),
             input_shape.data(),
             input_shape.size()
         );
 
-        // --- STEP 2: RUN INFERENCE ---
+        // 3. RUN INFERENCE
         auto output_tensors = session.Run(
-            Ort::RunOptions{nullptr}, 
-            input_names, 
-            &input_tensor, 
-            1, // Number of inputs
-            output_names, 
-            2  // Number of outputs
+            Ort::RunOptions{nullptr},
+            input_names,
+            &input_tensor,
+            1,
+            output_names,
+            2
         );
 
-        // --- STEP 3: EXTRACT OUTPUTS ---
-        
-        // Output 0: Policy (Logits or Probabilities) - Size 121
-        float* policy_raw = output_tensors[0].GetTensorMutableData<float>();
-        std::vector<float> policy(policy_raw, policy_raw + 121);
+        // 4. EXTRACT & SPLIT RESULTS
+        float* policy_ptr = output_tensors[0].GetTensorMutableData<float>();
+        float* value_ptr  = output_tensors[1].GetTensorMutableData<float>();
 
-        // Output 1: Value (Win Probability) - Size 1
-        float* value_raw = output_tensors[1].GetTensorMutableData<float>();
-        float value = value_raw[0];
+        std::vector<std::pair<std::vector<float>, float>> results;
+        results.reserve(batch_size);
 
-        return {policy, value};
+        for (size_t i = 0; i < batch_size; ++i) {
+            // A. Extract Policy Row (121 floats)
+            // Pointer arithmetic: Start at i * 121
+            std::vector<float> policy(policy_ptr + (i * 121), policy_ptr + ((i + 1) * 121));
+            // C. Extract Value (1 float)
+            float val = value_ptr[i];
+
+            results.push_back({policy, val});
+        }
+
+        return results;
     }
 };

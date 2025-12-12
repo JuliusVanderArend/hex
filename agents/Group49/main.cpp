@@ -3,7 +3,6 @@
 #include "src/Util.h"
 #include "src/Position.h"
 #include "src/MCTS.h"
-#include "src/Inference.cpp"
 
 #include <chrono>
 #include <string>
@@ -168,10 +167,12 @@ using namespace engine;
 std::unique_ptr<Inference> globalNet;
 std::unique_ptr<MCTS> globalMCTS;
 Position globalPos(0); // 0 = Red/Black (Start), 1 = Blue/White
+Inference net(MODEL_PATH);
+InferenceServer globalServer(net);
 bool engineRunning = true;
 
 // Configuration
-const int SEARCH_ITERATIONS = 100000; // Adjust based on your speed
+const int SEARCH_ITERATIONS = 25000; // Adjust based on your speed
 
 // =============================================================
 // COORDINATE HELPERS
@@ -313,7 +314,7 @@ void cmd_genmove(std::stringstream& ss) {
     // e.g. globalMCTS->search(globalPos, *globalNet, SEARCH_ITERATIONS);
 
     // Based on your self_play.cpp:
-    SearchResult result = globalMCTS->searchWithPolicy(globalPos, SEARCH_ITERATIONS);
+    SearchResult result = globalMCTS->searchWithPolicy(globalPos,globalServer, SEARCH_ITERATIONS);
 
     if (result.bestMove == -1) {
         gtpResponse("resign");

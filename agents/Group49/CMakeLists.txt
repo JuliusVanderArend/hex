@@ -13,7 +13,8 @@ include_directories(${ONNX_ROOT}/include)
 link_directories(${ONNX_ROOT}/lib)
 
 # 2. DEFINE EXECUTABLES
-add_executable(Group49 main.cpp src/Util.cpp src/Util.h src/Position.cpp src/Position.h src/Node.cpp src/MCTS.h src/Inference.cpp)
+add_executable(Group49 main.cpp src/Util.cpp src/Util.h src/Position.cpp src/Position.h src/Node.cpp src/MCTS.h src/Inference.cpp
+        src/InferenceServer.h)
 add_executable(Group49SelfPlay
         self_play.cpp
         src/Util.cpp src/Util.h
@@ -21,6 +22,7 @@ add_executable(Group49SelfPlay
         src/Node.cpp
         src/MCTS.h
         src/Inference.cpp
+        src/InferenceServer.h
 )
 
 # 3. LINK LIBRARIES (Simple and Clean)
@@ -45,7 +47,8 @@ include(FetchContent)
 FetchContent_Declare(googletest URL https://github.com/google/googletest/archive/refs/heads/main.zip)
 FetchContent_MakeAvailable(googletest)
 
-add_executable(HexTests tests/tests.cpp)
+add_executable(HexTests tests/tests.cpp
+        src/InferenceServer.h)
 target_sources(HexTests PRIVATE src/Position.cpp src/Util.cpp src/Inference.cpp)
 #target_sources(HexTests PRIVATE src/Position.cpp src/Util.cpp)
 
