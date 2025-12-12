@@ -175,28 +175,43 @@ private:
 
     // Selection: choose child index by PUCT formula
     int select_puct(Node* node) {
-        if (!node->expanded || node->children.empty()) return -1;
-
-        double sumN = 0.0;
-        for (const auto &ce : node->children) sumN += ce.N;
-        double sqrt_sum = std::sqrt(std::max(1.0, sumN));
+        // 1. Pre-calculate the constant part of the U-term
+        // Sum of visits is usually just the parent's visit count (minus 1)
+        double parent_visits_sqrt = std::sqrt(std::max(1.0, (double)node->visits - 1));
+        double exploration_factor = cpuct * parent_visits_sqrt;
 
         int bestIdx = -1;
         double bestVal = -std::numeric_limits<double>::infinity();
 
+        // 2. Loop
         for (int i = 0; i < (int)node->children.size(); ++i) {
             const ChildEntry &e = node->children[i];
-            double q = e.N ? (e.W / e.N) : 0.0;
-            double u = cpuct * e.P * (sqrt_sum / (1 + e.N));
-            double val = q + u;
-            if (val > bestVal) {
-                bestVal = val;
+
+            // OPTIMIZATION: Check First-Play Urgency (FPU)
+            // If a node has never been visited, avoid the division logic entirely.
+            if (e.N == 0) {
+                // Treat unvisited nodes as having a specific value (e.g., parent Q or infinite)
+                // This ensures highly rated Policy moves are visited first without math errors.
+                double fpu_val = 1000.0 + e.P; // Simple "Infinity" approach
+                if (fpu_val > bestVal) {
+                    bestVal = fpu_val;
+                    bestIdx = i;
+                }
+                continue;
+            }
+
+            // Standard PUCT
+            // We hoist the division: multiplication by reciprocal is often faster
+            double q = e.W / e.N;
+            double u = exploration_factor * (e.P / (1 + e.N));
+
+            if (q + u > bestVal) {
+                bestVal = q + u;
                 bestIdx = i;
             }
         }
         return bestIdx;
     }
-
 
     // Expansion: populate children with legal moves and priors.
     // If priors is empty, uniform is used.
