@@ -88,7 +88,7 @@ public:
 
         // 2. Determine Thread Count
         // Use hardware concurrency, or match your Batch Size (e.g., 32)
-        int numThreads = std::thread::hardware_concurrency();
+        int numThreads = 48;//std::thread::hardware_concurrency();
         if (numThreads == 0) numThreads = 1;
 
         // Ensure at least 1 iteration per thread

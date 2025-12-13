@@ -294,7 +294,7 @@ void Position::makeRandomRolloutMove(FastRand& rng) {
 
         for (int i = 0; i < PLANE_SIZE; ++i) {
             bool isRed = (boards[0] >> i) & 1;
-            bool isBlue = (boards[1] >> i) & 1;
+            bool isBlue = (boards[1] >> transposeMove(i)) & 1;
             bool connected = false;
 
             if (isRed) {
@@ -308,7 +308,7 @@ void Position::makeRandomRolloutMove(FastRand& rng) {
         // Red -> Bottom (V_END), Blue -> Right (V_END)
         for (int i = 0; i < PLANE_SIZE; ++i) {
             bool isRed = (boards[0] >> i) & 1;
-            bool isBlue = (boards[1] >> i) & 1;
+            bool isBlue = (boards[1] >> transposeMove(i)) & 1;
             bool connected = false;
 
             if (isRed) {

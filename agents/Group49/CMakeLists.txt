@@ -41,7 +41,7 @@ add_custom_command(TARGET Group49SelfPlay POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${ONNX_ROOT}/lib/libonnxruntime.so.1.23.2"
         $<TARGET_FILE_DIR:Group49SelfPlay>/libonnxruntime.so.1.23.2)
-
+add_executable(Arbiter arbiter.cpp src/Position.cpp src/Util.cpp)
 # --- TESTS ---
 include(FetchContent)
 FetchContent_Declare(googletest URL https://github.com/google/googletest/archive/refs/heads/main.zip)
