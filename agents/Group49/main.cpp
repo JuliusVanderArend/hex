@@ -172,7 +172,7 @@ InferenceServer globalServer(net);
 bool engineRunning = true;
 
 // Configuration
-const int SEARCH_ITERATIONS = 80000; // Adjust based on your speed
+const int SEARCH_ITERATIONS = 10000; // Adjust based on your speed
 
 // =============================================================
 // COORDINATE HELPERS
