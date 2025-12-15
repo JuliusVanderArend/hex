@@ -368,13 +368,13 @@ GameSamples playAgentGame(MCTS& agent, InferenceServer& server, int simulations)
 }
 
 // --- WORKER THREAD ---
-void worker(Mode mode, int totalGames, int simulations, bool saveSGF, std::atomic<int>& gamesPlayed, std::ofstream& out) {
+void worker(Mode mode, int totalGames, int simulations, bool saveSGF, std::atomic<int>& gamesPlayed, std::ofstream& out, const std::string& modelPath) {
     std::unique_ptr<Inference> net;
     std::unique_ptr<InferenceServer> server;
     std::unique_ptr<MCTS> mcts_agent;
 
     if (mode == Mode::AGENT) {
-        net = std::make_unique<Inference>(MODEL_PATH);
+        net = std::make_unique<Inference>(modelPath);
         server = std::make_unique<InferenceServer>(*net);
         mcts_agent = std::make_unique<MCTS>();
         mcts_agent->cpuct = 1.5;
@@ -467,6 +467,10 @@ int main(int argc, char** argv) {
     if (argc > 5 && mode == Mode::AGENT) {
         saveSGF = (std::stoi(argv[5]) != 0);
     }
+    std::string modelPath = "models/best.onnx"; // Default
+    if (mode == Mode::AGENT && argc > 6) {
+        modelPath = argv[6]; // Allow overriding model path
+    }
 
     std::ofstream out(outputPath, std::ios::out | std::ios::trunc);
     if (!out) {
@@ -474,7 +478,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    unsigned int nThreads = 8;
+    unsigned int nThreads = 6;
     // if (mode == Mode::AGENT) nThreads = 6;
 
     std::cout << "Starting Self-Play | Mode: " << (mode == Mode::MOHEX ? "MOHEX" : "AGENT") << std::endl;
@@ -485,7 +489,7 @@ int main(int argc, char** argv) {
     std::atomic<int> gamesPlayed{0};
 
     for (unsigned int i = 0; i < nThreads; ++i) {
-        threads.emplace_back(worker, mode, games, simulations, saveSGF, std::ref(gamesPlayed), std::ref(out));
+        threads.emplace_back(worker, mode, games, simulations, saveSGF, std::ref(gamesPlayed), std::ref(out),modelPath);
     }
 
     for (auto& t : threads) {
