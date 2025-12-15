@@ -35,8 +35,8 @@ namespace engine {
         std::thread server_thread;
 
         // Tuning Parameters
-        const size_t MAX_BATCH_SIZE = 32;
-        const std::chrono::microseconds BATCH_TIMEOUT = std::chrono::microseconds(500); // 0.5ms
+        const size_t MAX_BATCH_SIZE = 128;
+        const std::chrono::microseconds BATCH_TIMEOUT = std::chrono::microseconds(100); // 0.1ms
 
     public:
         InferenceServer(Inference& network) : net(network) {
@@ -139,6 +139,13 @@ namespace engine {
                 }
 
                 if (batch.empty()) continue;
+
+                // LOG
+                static std::atomic<int> printed{0};
+                if (printed++ < 20) {
+                    std::cout << "[InferenceServer] batch size = "
+                              << batch.size() << std::endl;
+                }
 
                 // --- BATCH INFERENCE ---
                 std::vector<Position> positions;
