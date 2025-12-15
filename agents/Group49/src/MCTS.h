@@ -86,6 +86,7 @@ public:
             Node* leaf = select(root, scratchPos);
 
             // C. Expansion
+
             // If the game isn't effectively over at this leaf, expand it.
             // Note: getWinner returns -1 if ongoing.
             if (scratchPos.getWinner() == -1 && !leaf->isTerminal()) {
