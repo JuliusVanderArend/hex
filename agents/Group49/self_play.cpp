@@ -29,9 +29,9 @@ using namespace engine;
 
 // --- CONFIGURATION ---
 const std::string MOHEX_PATH =
-    "/home/julius/benzene-vanilla-cmake/build/src/mohex/mohex";
+    "mohex";
 const std::string MOHEX_CONFIG =
-    "/home/julius/benzene-vanilla-cmake/mohex_selfplay.htp";
+    "mohex_selfplay.htp";
 
 const int TEMP_THRESHOLD = 20;
 
