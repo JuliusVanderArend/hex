@@ -261,63 +261,70 @@ void Position::makeRandomRolloutMove(FastRand& rng) {
         return -1;
     }
 
+
+    void Position::toTensor(float* dst) const {
+        constexpr int PLANE_SIZE = 121;
+
+        float* ptr = dst;
+
+        // --- 1. Red Stones ---
+        for (int i = 0; i < PLANE_SIZE; ++i)
+            ptr[i] = ((boards[0] >> i) & 1) ? 1.0f : 0.0f;
+        ptr += PLANE_SIZE;
+
+        // --- 2. Blue Stones (transposed) ---
+        for (int i = 0; i < PLANE_SIZE; ++i)
+            ptr[i] = ((boards[1] >> transposeMove(i)) & 1) ? 1.0f : 0.0f;
+        ptr += PLANE_SIZE;
+
+        // --- 3. Turn (side to move) ---
+        float turnVal = (sideToMove == 0) ? 1.0f : 0.0f;
+        for (int i = 0; i < PLANE_SIZE; ++i)
+            ptr[i] = turnVal;
+        ptr += PLANE_SIZE;
+
+        // --- 4. Last move ---
+        for (int i = 0; i < PLANE_SIZE; ++i)
+            ptr[i] = (i == lastMove) ? 1.0f : 0.0f;
+        ptr += PLANE_SIZE;
+
+        // --- 5. Connected to V_START ---
+        for (int i = 0; i < PLANE_SIZE; ++i) {
+            bool isRed  = (boards[0] >> i) & 1;
+            bool isBlue = (boards[1] >> transposeMove(i)) & 1;
+
+            bool connected = false;
+            if (isRed)
+                connected = dsus[0].isConnected(i, V_START);
+            else if (isBlue)
+                connected = dsus[1].isConnected(transposeMove(i), V_START);
+
+            ptr[i] = connected ? 1.0f : 0.0f;
+        }
+        ptr += PLANE_SIZE;
+
+        // --- 6. Connected to V_END ---
+        for (int i = 0; i < PLANE_SIZE; ++i) {
+            bool isRed  = (boards[0] >> i) & 1;
+            bool isBlue = (boards[1] >> transposeMove(i)) & 1;
+
+            bool connected = false;
+            if (isRed)
+                connected = dsus[0].isConnected(i, V_END);
+            else if (isBlue)
+                connected = dsus[1].isConnected(transposeMove(i), V_END);
+
+            ptr[i] = connected ? 1.0f : 0.0f;
+        }
+    }
+
+
     std::vector<float> Position::toTensor() const {
         constexpr int CHANNELS = 6;
         constexpr int PLANE_SIZE = 121;
 
-        std::vector<float> tensor;
-        tensor.reserve(CHANNELS * PLANE_SIZE);
-
-        // --- 1. Red Stones ---
-        for (int i = 0; i < PLANE_SIZE; ++i)
-            tensor.push_back(((boards[0] >> i) & 1) ? 1.0f : 0.0f);
-
-        // --- 2. Blue Stones ---
-        for (int i = 0; i < PLANE_SIZE; ++i)
-            tensor.push_back(((boards[1] >> transposeMove(i)) & 1) ? 1.0f : 0.0f);
-
-        // --- 3. Turn (Color) ---
-        float turnVal = (sideToMove == 0) ? 1.0f : 0.0f;
-        for (int i = 0; i < PLANE_SIZE; ++i)
-            tensor.push_back(turnVal);
-
-        for (int i = 0; i < PLANE_SIZE; ++i) {
-            // If i matches the last move played, set to 1.0, else 0.0
-            // If lastMove is -1 (start of game), this entire plane will be 0.0
-            // should transpose for blue????
-            if (i == lastMove) {
-                tensor.push_back(1.0f);
-            } else {
-                tensor.push_back(0.0f);
-            }
-        }
-
-        for (int i = 0; i < PLANE_SIZE; ++i) {
-            bool isRed = (boards[0] >> i) & 1;
-            bool isBlue = (boards[1] >> transposeMove(i)) & 1;
-            bool connected = false;
-
-            if (isRed) {
-                connected = dsus[0].isConnected(i, V_START);
-            } else if (isBlue) {
-                connected = dsus[1].isConnected(transposeMove(i), V_START);
-            }
-            tensor.push_back(connected ? 1.0f : 0.0f);
-        }
-
-        // Red -> Bottom (V_END), Blue -> Right (V_END)
-        for (int i = 0; i < PLANE_SIZE; ++i) {
-            bool isRed = (boards[0] >> i) & 1;
-            bool isBlue = (boards[1] >> transposeMove(i)) & 1;
-            bool connected = false;
-
-            if (isRed) {
-                connected = dsus[0].isConnected(i, V_END);
-            } else if (isBlue) {
-                connected = dsus[1].isConnected(transposeMove(i), V_END);
-            }
-            tensor.push_back(connected ? 1.0f : 0.0f);
-        }
+        std::vector<float> tensor(CHANNELS * PLANE_SIZE);
+        toTensor(tensor.data());   // <-- используем новый метод
         return tensor;
     }
 

@@ -338,7 +338,7 @@ TEST_F(PerformanceTest, Calculate_NPS) {
 
     // Configuration:
     // NN Inference is slow. 500 iterations is enough to gauge NPS.
-    int iterations = 50000;
+    int iterations = 500000;
 
     std::cout << "[Benchmark] Starting Neural MCTS Search (" << iterations << " iterations)..." << std::endl;
 

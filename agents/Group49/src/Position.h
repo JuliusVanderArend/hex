@@ -57,7 +57,10 @@ namespace engine {
         Move getRandomLegalMove(FastRand& rng) const;
         int getWinner() const;
 
+        // --- OLD API
         std::vector<float> toTensor() const;
+        // --- NEW API
+        void toTensor(float* dst) const;
 
         void printBitboard(Board board) const;
         void printPosition() const;

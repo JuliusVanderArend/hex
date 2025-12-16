@@ -25,22 +25,22 @@ struct Node;
 struct ChildEntry {
     int move = -1;
     Node* child = nullptr;
-    double P = 0.0;
+    float P = 0.0f;
 
     // Stats are now protected by the Parent Node's mutex
     int N = 0;
-    double W = 0.0;
+    float W = 0.0f;
     int virtualLoss = 0;    // [New] Tracks pending threads on this edge
 
     // Q-Value with Virtual Loss
     // We treat virtual losses as if they were visits with a losing value (-1.0)
-    double Q(double virtualLossWeight = 1.0) const {
+    float Q(float virtualLossWeight = 1.0) const {
         int effectiveN = N + virtualLoss;
-        if (effectiveN == 0) return 0.0;
+        if (effectiveN == 0) return 0.0f;
 
         // Subtract virtual loss from W (assuming W is relative perspective)
         // Effectively dragging the average down temporarily
-        double effectiveW = W - (virtualLoss * virtualLossWeight);
+        float effectiveW = W - (virtualLoss * virtualLossWeight);
         return effectiveW / effectiveN;
     }
 };
@@ -88,7 +88,7 @@ public:
 
         // 2. Determine Thread Count
         // Use hardware concurrency, or match your Batch Size (e.g., 32)
-        int numThreads = 48;//std::thread::hardware_concurrency();
+        int numThreads = 192;//std::thread::hardware_concurrency();
         if (numThreads == 0) numThreads = 1;
 
         // Ensure at least 1 iteration per thread
@@ -186,7 +186,8 @@ private:
         // NOTE: This function assumes the caller holds node->mutex
         int bestIdx = -1;
         double bestScore = -std::numeric_limits<double>::infinity();
-        double sqrtVisits = std::sqrt(node->visits);
+        double sqrtVisits = std::sqrt((double)node->visits);
+        double expl = cpuct * sqrtVisits;
 
         for (int i = 0; i < (int)node->children.size(); ++i) {
             const ChildEntry& e = node->children[i];
@@ -200,7 +201,8 @@ private:
             }
 
             // Exploration Term (using effective N)
-            double U_val = cpuct * e.P * sqrtVisits / (1.0 + e.N + e.virtualLoss);
+            double denom = 1.0 + e.N + e.virtualLoss;
+            double U_val = expl * e.P / denom;
 
             double score = Q_val + U_val;
 
@@ -213,24 +215,68 @@ private:
     }
 
     void expandNode(Node* node, const Position& pos, const std::vector<float>& policy_full) {
-        // NOTE: Caller must hold lock if multithreaded (worker_step does)
+        // Caller must hold node->mutex
         std::vector<int> legal = pos.getLegalMoves();
-        node->children.reserve(legal.size());
 
-        double sumP = 0.0;
+        static constexpr int TOP_K = 24;
+        static constexpr float MIN_P = 1e-6f;
+
+        // 1. Rank legal moves by policy probability
+        std::vector<std::pair<float, int>> ranked;
+        ranked.reserve(legal.size());
+
         for (int mv : legal) {
-            double p = 0.0;
-            if (mv >= 0 && mv < (int)policy_full.size()) p = policy_full[mv];
-            node->children.push_back({mv, nullptr, p, 0, 0.0, 0}); // Init virtualLoss=0
-            sumP += p;
+            float p = (mv >= 0 && mv < (int)policy_full.size())
+                        ? policy_full[mv]
+                        : 0.0f;
+
+            if (p > MIN_P) {
+                ranked.emplace_back(p, mv);
+            }
         }
 
-        if (sumP > 1e-9) {
-            for (auto& ce : node->children) ce.P /= sumP;
-        } else {
-            double uniform = 1.0 / legal.size();
-            for (auto& ce : node->children) ce.P = uniform;
+        // Fallback: if all probabilities are tiny / zero
+        if (ranked.empty()) {
+            for (int mv : legal) {
+                ranked.emplace_back(1.0f, mv);
+            }
         }
+
+        // 2. Keep only Top-K moves
+        int K = std::min(TOP_K, (int)ranked.size());
+
+        std::partial_sort(
+            ranked.begin(),
+            ranked.begin() + K,
+            ranked.end(),
+            [](const auto& a, const auto& b) {
+                return a.first > b.first;
+            }
+        );
+
+        node->children.clear();
+        node->children.reserve(K);
+
+        // 3. Normalize priors
+        float sumP = 0.0f;
+        for (int i = 0; i < K; ++i) sumP += ranked[i].first;
+        if (sumP <= 0.0f) sumP = 1.0f;
+
+        // 4. Create children
+        for (int i = 0; i < K; ++i) {
+            float p = ranked[i].first / sumP;
+            int mv = ranked[i].second;
+
+            node->children.push_back({
+                mv,
+                nullptr,
+                p,
+                0,      // N
+                0.0f,   // W
+                0       // virtualLoss
+            });
+        }
+
         node->expanded = true;
     }
 
