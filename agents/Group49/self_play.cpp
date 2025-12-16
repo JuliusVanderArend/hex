@@ -18,6 +18,7 @@
 #include <csignal>
 #include <memory>
 #include <random>
+#include <chrono>
 
 #include "src/Position.h"
 #include "src/Util.h"
@@ -27,7 +28,11 @@
 using namespace engine;
 
 // --- CONFIGURATION ---
-const std::string MOHEX_PATH = "/home/julius/benzene-vanilla-cmake/build/src/wolve/wolve";
+const std::string MOHEX_PATH =
+    "/home/d4k3rz/benzene-vanilla-cmake/build/src/mohex/mohex";
+const std::string MOHEX_CONFIG =
+    "/home/d4k3rz/benzene-vanilla-cmake/mohex_selfplay.htp";
+
 const int TEMP_THRESHOLD = 20;
 
 std::mutex io_mutex;
@@ -166,26 +171,41 @@ class GtpEngine {
     pid_t pid;
 
 public:
-    GtpEngine(const std::string& cmd) {
-        if (pipe(pipe_in) < 0 || pipe(pipe_out) < 0) throw std::runtime_error("Failed to create pipes");
+    GtpEngine(const std::string& cmd, const std::string& configPath) {
+        if (pipe(pipe_in) < 0 || pipe(pipe_out) < 0)
+            throw std::runtime_error("Failed to create pipes");
+
         pid = fork();
-        if (pid < 0) throw std::runtime_error("Failed to fork");
+        if (pid < 0)
+            throw std::runtime_error("Failed to fork");
 
         if (pid == 0) {
+            // Child
             dup2(pipe_in[0], STDIN_FILENO);
             dup2(pipe_out[1], STDOUT_FILENO);
+
             int devNull = open("/dev/null", O_WRONLY);
             dup2(devNull, STDERR_FILENO);
             close(devNull);
+
             close(pipe_in[1]);
             close(pipe_out[0]);
-            execl(cmd.c_str(), cmd.c_str(), nullptr);
+
+            execl(
+                cmd.c_str(),
+                cmd.c_str(),
+                ("--config=" + configPath).c_str(),
+                nullptr
+            );
+
             exit(127);
         } else {
+            // Parent
             close(pipe_in[0]);
             close(pipe_out[1]);
         }
     }
+
 
     ~GtpEngine() {
         sendCommand("quit");
@@ -213,25 +233,35 @@ public:
     }
 
     int getMove(int sideToMove) {
-        std::string color = (sideToMove == 0) ? "black" : "white";
-        sendCommand("genmove " + color);
-        std::string resp = readResponse();
-        if (resp.empty() || resp[0] != '=') return -1;
-        std::stringstream ss(resp.substr(1));
-        std::string moveStr;
-        ss >> moveStr;
-        if (moveStr == "resign" || moveStr == "swap") return -1;
-        return stringToMove(moveStr);
-    }
+    	std::string color = (sideToMove == 0) ? "black" : "white";
+    	sendCommand("genmove " + color);
+    	std::string resp = readResponse();
+
+    	if (resp.empty() || resp[0] != '=')
+     	   return -1; // protocol error
+
+   		std::stringstream ss(resp.substr(1));
+    	std::string moveStr;
+    	ss >> moveStr;
+
+    	if (moveStr == "resign")
+        	return -2;   // Resign value
+
+    	if (moveStr == "swap")
+        	return -3;   // Swap value
+
+    	return stringToMove(moveStr);
+}
+
 
     void init(int seed) {
-        sendCommand("boardsize 11"); readResponse();
-        sendCommand("clear_board"); readResponse();
-        sendCommand("param_mohex max_games 512"); readResponse();
-        sendCommand("param_mohex swap_allowed 0"); readResponse();
-        sendCommand("param_mohex random_seed " + std::to_string(seed)); readResponse();
-        sendCommand("param_mohex random_opening_moves 1"); readResponse();
-    }
+    sendCommand("boardsize 11");
+    readResponse();
+    sendCommand("clear_board");
+    readResponse();
+    sendCommand("param_mohex random_seed " + std::to_string(seed));
+    readResponse();
+}
 };
 
 struct GameSamples {
@@ -267,28 +297,60 @@ GameSamples playMohexGame(GtpEngine& engine) {
     }
 
     while (pos.getWinner() == -1) {
-        int bestMove = engine.getMove(pos.sideToMove);
-        if (bestMove < 0 || bestMove >= BOARD_AREA) break;
+    	int bestMove = engine.getMove(pos.sideToMove);
 
-        Sample sample;
-        sample.playerToMove = pos.sideToMove;
-        std::vector<float> tensor = pos.toTensor();
-        sample.red        = extractPlane(tensor, 0);
-        sample.blue       = extractPlane(tensor, 1);
-        sample.turn       = extractPlane(tensor, 2);
-        sample.last_move  = extractPlane(tensor, 3);
-        sample.conn_start = extractPlane(tensor, 4);
-        sample.conn_end   = extractPlane(tensor, 5);
-        sample.policy.fill(0.0);
-        sample.policy[bestMove] = 1.0;
-        sample.rootValue = 0.0;
-        record.samples.push_back(sample);
+    	// --- RESIGN ---
+    	if (bestMove == -2) {
+       		// текущий игрок сдался → победил другой
+        	record.winner = 1 - pos.sideToMove;
+        	break;
+    	}
 
-        record.moveHistory.push_back(moveToString(bestMove));
-        pos.makeMove(bestMove);
-    }
-    record.winner = pos.getWinner();
-    if (record.winner == -1) record.winner = 2;
+    	// --- SWAP ---
+    	if (bestMove == -3) {
+        	// пока делаем максимально просто:
+        	// либо запрещаем swap, либо считаем его resign
+        	record.winner = pos.sideToMove;
+        	break;
+    	}
+
+    	// --- Ошибка ---
+    	if (bestMove < 0 || bestMove >= BOARD_AREA) {
+        	break;
+    	}
+
+    	// --- Обычный ход ---
+    	Sample sample;
+    	sample.playerToMove = pos.sideToMove;
+    	std::vector<float> tensor = pos.toTensor();
+    	sample.red        = extractPlane(tensor, 0);
+    	sample.blue       = extractPlane(tensor, 1);
+    	sample.turn       = extractPlane(tensor, 2);
+    	sample.last_move  = extractPlane(tensor, 3);
+    	sample.conn_start = extractPlane(tensor, 4);
+    	sample.conn_end   = extractPlane(tensor, 5);
+    	sample.policy.fill(0.0);
+    	sample.policy[bestMove] = 1.0;
+    	sample.rootValue = 0.0f;
+
+    	record.samples.push_back(sample);
+    	record.moveHistory.push_back(moveToString(bestMove));
+    	pos.makeMove(bestMove);
+	}
+
+    if (record.winner == -1)
+    	record.winner = pos.getWinner();
+
+	if (record.winner == -1)
+    	record.winner = 2; // error
+
+	for (auto& sample : record.samples) {
+    	sample.rootValue =
+        	(record.winner == 2) ? 0.0f :
+        	(record.winner == sample.playerToMove ? 1.0f : -1.0f);
+	}
+
+	std::cout << "Winner = " << record.winner << std::endl;
     return record;
 }
 
@@ -388,7 +450,7 @@ void worker(Mode mode, int totalGames, int simulations, bool saveSGF, std::atomi
             GameSamples record;
 
             if (mode == Mode::MOHEX) {
-                GtpEngine engine(MOHEX_PATH);
+                GtpEngine engine(MOHEX_PATH, MOHEX_CONFIG);
                 record = playMohexGame(engine);
             } else {
                 record = playAgentGame(*mcts_agent, *server, simulations);
@@ -478,7 +540,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    unsigned int nThreads = 6;
+    unsigned int nThreads = 8;
     // if (mode == Mode::AGENT) nThreads = 6;
 
     std::cout << "Starting Self-Play | Mode: " << (mode == Mode::MOHEX ? "MOHEX" : "AGENT") << std::endl;
@@ -488,6 +550,8 @@ int main(int argc, char** argv) {
     std::vector<std::thread> threads;
     std::atomic<int> gamesPlayed{0};
 
+	auto t_start = std::chrono::steady_clock::now();
+
     for (unsigned int i = 0; i < nThreads; ++i) {
         threads.emplace_back(worker, mode, games, simulations, saveSGF, std::ref(gamesPlayed), std::ref(out),modelPath);
     }
@@ -496,6 +560,10 @@ int main(int argc, char** argv) {
         if (t.joinable()) t.join();
     }
 
+	auto t_end = std::chrono::steady_clock::now();
+	double seconds = std::chrono::duration<double>(t_end - t_start).count();
+
     std::cout << "Done. Saved to " << outputPath << std::endl;
+	std::cout << "Self-play time: " << seconds << " seconds" << std::endl;
     return 0;
 }
