@@ -141,11 +141,11 @@ namespace engine {
                 if (batch.empty()) continue;
 
                 // LOG
-                static std::atomic<int> printed{0};
-                if (printed++ < 20) {
-                    std::cout << "[InferenceServer] batch size = "
-                              << batch.size() << std::endl;
-                }
+                // static std::atomic<int> printed{0};
+                // if (printed++ < 20) {
+                //     std::cout << "[InferenceServer] batch size = "
+                //               << batch.size() << std::endl;
+                // }
 
                 // --- BATCH INFERENCE ---
                 std::vector<Position> positions;

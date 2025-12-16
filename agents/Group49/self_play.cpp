@@ -29,9 +29,9 @@ using namespace engine;
 
 // --- CONFIGURATION ---
 const std::string MOHEX_PATH =
-    "/home/d4k3rz/benzene-vanilla-cmake/build/src/mohex/mohex";
+    "/home/julius/benzene-vanilla-cmake/build/src/mohex/mohex";
 const std::string MOHEX_CONFIG =
-    "/home/d4k3rz/benzene-vanilla-cmake/mohex_selfplay.htp";
+    "/home/julius/benzene-vanilla-cmake/mohex_selfplay.htp";
 
 const int TEMP_THRESHOLD = 20;
 
@@ -308,10 +308,12 @@ GameSamples playMohexGame(GtpEngine& engine) {
 
     	// --- SWAP ---
     	if (bestMove == -3) {
-        	// пока делаем максимально просто:
-        	// либо запрещаем swap, либо считаем его resign
-        	record.winner = pos.sideToMove;
-        	break;
+    	    // 1. Record History
+    	    record.moveHistory.push_back("swap");
+    	    // 2. Adjust Logic (Manual Fix)
+    	    pos.moveCount++;
+    	    // 3. Do NOT save a sample (cannot train on swap)
+    	    continue;
     	}
 
     	// --- Ошибка ---
@@ -377,6 +379,18 @@ GameSamples playAgentGame(MCTS& agent, InferenceServer& server, int simulations)
     int movesPlayed = 0;
     while (pos.getWinner() == -1) {
         SearchResult result = agent.searchWithPolicy(pos, server, simulations);
+
+        if (pos.moveCount == 1) {
+            // If we (Blue) have < 50% win rate, Red's opening was too strong. Swap.
+            // Note: result.rootValue is from the perspective of the side to move.
+            if (result.rootValue < 0.5f) {
+                // Execute Swap
+                record.moveHistory.push_back("swap");
+                pos.moveCount++;
+                movesPlayed++;
+                continue; // Skip making a physical move
+            }
+        }
 
         double temp = (movesPlayed < TEMP_THRESHOLD) ? 1.0 : 0.0;
         int chosenMove = pickMoveFromPolicy(result.policy, temp, rng);

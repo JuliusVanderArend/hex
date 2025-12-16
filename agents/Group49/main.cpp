@@ -110,33 +110,44 @@ void cmd_play(std::stringstream& ss) {
     std::string color, coord;
     ss >> color >> coord;
 
-    // Parse Color (w/white or b/black)
-    // HexGui often sends "play white A1"
+    // ... (Color parsing logic remains the same) ...
     int player = -1;
     char c = std::tolower(color[0]);
-    if (c == 'b' || c == 'r') player = 0; // Black/Red
-    else if (c == 'w' || c == 'b') player = 1; // White/Blue
+    if (c == 'b' || c == 'r') player = 0;
+    else if (c == 'w' || c == 'b') player = 1;
 
     if (player == -1) {
         gtpResponse("invalid color", false);
         return;
     }
 
-    // Check if move matches current turn (HexGui might try to force out-of-turn play)
-    if (player != globalPos.sideToMove) {
-        // In some protocols, we might accept this by forcing the side to move
-        globalPos.sideToMove = player;
+    // Check for swap code (-2)
+    int move = stringToMove(coord);
+
+    if (move == -2) {
+        // Swap is only legal on the second turn (Move Count == 1)
+        if (globalPos.moveCount == 1) {
+            // Valid Swap.
+            // We do NOT modify the board. The 'sideToMove' is already 1 (Blue),
+            // and after swap, the 'New Blue' (us) still needs to make a move.
+            // So the board state remains identical.
+            gtpResponse("");
+        } else {
+            gtpResponse("illegal move: swap only allowed on turn 2", false);
+        }
+        return;
     }
 
-    int move = stringToMove(coord);
     if (move == -1) {
         gtpResponse("invalid coordinate", false);
         return;
     }
 
-    if (move == -2) {
-        // Swap logic (if supported)
-        gtpResponse("swap not implemented", false);
+    // Standard move handling
+    if (player != globalPos.sideToMove) globalPos.sideToMove = player;
+
+    if (!globalPos.isMoveLegal(move)) {
+        gtpResponse("illegal move", false);
         return;
     }
 
@@ -146,24 +157,24 @@ void cmd_play(std::stringstream& ss) {
 
 void cmd_genmove(std::stringstream& ss, InferenceServer& globalServer) {
     std::string color;
-    ss >> color; // e.g. "genmove white"
+    ss >> color;
 
-    // Optional: Ensure side to move matches requested color
-    // ...
+    // 1. Run MCTS as normal
+    SearchResult result = globalMCTS->searchWithPolicy(globalPos, globalServer, SEARCH_ITERATIONS);
 
-    // RUN MCTS
-    // Note: If you implemented the InferenceServer, pass it here or ensure globalMCTS uses it.
-    // Assuming standard MCTS usage:
-
-    // Log for debugging
-    std::cerr << "Thinking..." << std::endl;
-
-    // Call your MCTS search
-    // If you need to pass the NeuralNet, make sure your MCTS class accepts it
-    // e.g. globalMCTS->search(globalPos, *globalNet, SEARCH_ITERATIONS);
-
-    // Based on your self_play.cpp:
-    SearchResult result = globalMCTS->searchWithPolicy(globalPos,globalServer, SEARCH_ITERATIONS);
+    // 2. Check for Swap Opportunity
+    std::cerr << "Move Count: " << globalPos.moveCount << std::endl;
+    if (globalPos.moveCount == 1) {
+        // result.rootValue is the win probability for the current player (Blue).
+        // If < 0.5, it means Red (Player 1) has the advantage.
+        // We should swap to take the Red position.
+        if (result.rootValue < 0.5f) {
+            std::cerr << "Eval (" << result.rootValue << ") favors opponent. Swapping." << std::endl;
+            gtpResponse("swap");
+            globalPos.moveCount++; //will this cause bugs?? because move count no longer equals number of stones on board???
+            return;
+        }
+    }
 
     if (result.bestMove == -1) {
         gtpResponse("resign");
@@ -179,10 +190,10 @@ void cmd_genmove(std::stringstream& ss, InferenceServer& globalServer) {
 
 int main(int argc, char* argv[]) {
     // 1. Load Model (Optional: From argv)
-    std::string modelFile = "/home/skynet/git/hex/agents/Group49/models/best.onnx";
-    if (argc > 1) modelFile = argv[1];
+    // std::string modelFile = "/home/julius/git/hex/agents/Group49/models/hex_run_mohex.onnx";
+    // if (argc > 1) modelFile = argv[1];
 
-    Inference net(modelFile);
+    Inference net(MODEL_PATH);
     InferenceServer globalServer(net);
     try {
         // If your NeuralNet constructor takes wstring (Windows), convert it.
