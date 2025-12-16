@@ -257,14 +257,9 @@ public:
         //     sendCommand("param_mohex max_games " + std::to_string(simLimit));
         //     readResponse(); // Consume potential error silently
         // }
-        sendCommand("param_mohex swap_allowed 0");
-        r = readResponse();
-        std::cout << r << std::endl;
+
         // sendCommand("param_mohex max_threads 1");
         // readResponse();
-        sendCommand("param_wolve swap_allowed 0");
-        r = readResponse();
-        std::cout << r << std::endl;
 
         // sendCommand("param_wolve max_threads 1");
         // readResponse();
@@ -335,14 +330,19 @@ GameResult playSingleGame(GtpEngine& blackEngineRef, GtpEngine& whiteEngineRef, 
         std::string color = (i % 2 == 0) ? "black" : "white";
 
         pBlack->sendCommand("play " + color + " " + moveStr);
+        if (pBlack->readResponse().empty()) { pBlack->printLogTail(); res.crashed = true; return res; }
         pWhite->sendCommand("play " + color + " " + moveStr);
-        // ... (Error checking omitted for brevity, keep your existing checks) ...
+        if (pWhite->readResponse().empty()) { pWhite->printLogTail(); res.crashed = true; return res; }
     }
 
-    // --- MAIN PHASE ---
+    {
+        std::lock_guard<std::mutex> lock(print_mutex);
+        std::cout << "\n--- Start of Game (" << pBlack->getName() << " vs " << pWhite->getName() << ") ---" << std::endl;
+        printHexBoard(pos, "Opening");
+    }
+
     int moves = OPENING_PLIES;
     while (pos.getWinner() == -1 && moves < SAFETY_LIMIT) {
-        // Dynamic lookup based on pointers (which might have swapped)
         GtpEngine* current = (pos.sideToMove == 0) ? pBlack : pWhite;
         GtpEngine* other   = (pos.sideToMove == 0) ? pWhite : pBlack;
         std::string colorStr = (pos.sideToMove == 0) ? "black" : "white";
@@ -350,7 +350,19 @@ GameResult playSingleGame(GtpEngine& blackEngineRef, GtpEngine& whiteEngineRef, 
         current->sendCommand("genmove " + colorStr);
         std::string resp = current->readResponse();
 
-        // ... (Crash handling omitted, keep existing) ...
+        if (resp.empty() || resp[0] != '=') {
+            std::lock_guard<std::mutex> lock(print_mutex);
+            std::cerr << "[!] " << current->getName() << " CRASHED." << std::endl;
+            current->printLogTail();
+            res.winner = (pos.sideToMove == 0) ? 1 : 0;
+            res.finalString = current->getName() + " Forfeited (Crash)";
+            res.crashed = false;
+            saveGameToSGF("game_" + std::to_string(gameId) + ".sgf",
+                          pBlack->getName(), pWhite->getName(),
+                          (pos.sideToMove == 0) ? 1 : 0, moveHistory);
+            return res;
+        }
+
 
         std::stringstream ss(resp.substr(1));
         std::string moveStr;
@@ -359,7 +371,11 @@ GameResult playSingleGame(GtpEngine& blackEngineRef, GtpEngine& whiteEngineRef, 
 
         if (moveStr == "swap") {
             // --- SWAP LOGIC ---
-            if (moves != 1) { /* Optional: Error if swap not on turn 2? */ }
+            if (moves != 1) {
+                std::abort(); // Should never happen, but just in case
+                res.crashed = true;
+                return res;
+            }
 
             // 1. Tell the other engine that a swap happened
             other->sendCommand("play " + colorStr + " swap");
@@ -368,7 +384,7 @@ GameResult playSingleGame(GtpEngine& blackEngineRef, GtpEngine& whiteEngineRef, 
             // 2. Swap the pointers!
             // The engine that WAS White becomes Black, and vice versa.
             std::swap(pBlack, pWhite);
-
+            std::cout << ">>> SWAP! Engines switched sides." << std::endl;
             // 3. Update State
             // Do NOT call pos.makeMove(). Board stones don't change.
             // But we increment counters to keep game flow correct.
@@ -381,13 +397,32 @@ GameResult playSingleGame(GtpEngine& blackEngineRef, GtpEngine& whiteEngineRef, 
             }
             continue; // Skip the rest of the loop
         }
+        if (moveStr == "resign") {
+            res.winner = (pos.sideToMove == 0) ? 1 : 0;
+            res.finalString = currentEngine.getName() + " resigned";
+            saveGameToSGF("game_" + std::to_string(gameId) + ".sgf",
+                          black.getName(), white.getName(),
+                          (pos.sideToMove == 0) ? 1 : 0, moveHistory);
+            return res;
+        }
+
 
         // ... (Standard Resign/Move handling remains the same) ...
         int move = stringToMove(moveStr);
+        if (!pos.isMoveLegal(move)) {
+            res.crashed = true;
+            return res;
+        }
+
         pos.makeMove(move);
         moves++;
 
-        // ... (Print Board) ...
+        {
+            std::lock_guard<std::mutex> lock(print_mutex);
+            std::cout << "\nMove " << moves << " | " << current->getName() << " (" << colorStr << ") played " << moveStr << ":" << std::endl;
+            printHexBoard(pos);
+        }
+
 
         other->sendCommand("play " + colorStr + " " + moveStr);
         other->readResponse();
