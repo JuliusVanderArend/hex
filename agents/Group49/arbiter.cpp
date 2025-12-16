@@ -116,16 +116,9 @@ int stringToMove(std::string s) {
     return row * BOARD_SIZE + col;
 }
 
-void printHexBoard(const Position& pos, const std::string& evalInfo) {
+void printHexBoard(const Position& pos) {
     std::cout << "   ";
     for (int i = 0; i < BOARD_SIZE; ++i) std::cout << (char)('A' + i) << " ";
-
-    // Print Evaluation Info next to the board header
-    if (!evalInfo.empty()) {
-        std::cout << "   [MoHex Eval: " << evalInfo << "]";
-    }
-    std::cout << "\n";
-
     pos.printPosition();
 }
 
@@ -338,7 +331,7 @@ GameResult playSingleGame(GtpEngine& blackEngineRef, GtpEngine& whiteEngineRef, 
     {
         std::lock_guard<std::mutex> lock(print_mutex);
         std::cout << "\n--- Start of Game (" << pBlack->getName() << " vs " << pWhite->getName() << ") ---" << std::endl;
-        printHexBoard(pos, "Opening");
+        printHexBoard(pos);
     }
 
     int moves = OPENING_PLIES;
@@ -372,7 +365,7 @@ GameResult playSingleGame(GtpEngine& blackEngineRef, GtpEngine& whiteEngineRef, 
         if (moveStr == "swap") {
             // --- SWAP LOGIC ---
             if (moves != 1) {
-                std::abort(); // Should never happen, but just in case
+                std::cerr << ">>> SWAP LOGIC ERROR: Expected move 1, got " << moves << "!" << std::endl;
                 res.crashed = true;
                 return res;
             }
@@ -399,9 +392,9 @@ GameResult playSingleGame(GtpEngine& blackEngineRef, GtpEngine& whiteEngineRef, 
         }
         if (moveStr == "resign") {
             res.winner = (pos.sideToMove == 0) ? 1 : 0;
-            res.finalString = currentEngine.getName() + " resigned";
+            res.finalString = current->getName() + " resigned";
             saveGameToSGF("game_" + std::to_string(gameId) + ".sgf",
-                          black.getName(), white.getName(),
+                          pBlack->getName(), pWhite->getName(),
                           (pos.sideToMove == 0) ? 1 : 0, moveHistory);
             return res;
         }
@@ -428,10 +421,36 @@ GameResult playSingleGame(GtpEngine& blackEngineRef, GtpEngine& whiteEngineRef, 
         other->readResponse();
     }
 
-    // ... (Result processing) ...
-    // Note: Because we swapped pBlack/pWhite, the winner logic is:
-    // If pos.getWinner() == 0 (Red), the winner is whoever pBlack CURRENTLY points to.
-    // This correctly attributes the win to the agent playing that color.
+    int winnerColor = pos.getWinner(); // 0 = Black(Red), 1 = White(Blue), -1 = Draw
+
+    if (winnerColor != -1) {
+        res.finalString = "Checkmate";
+
+        // 2. Identify WHICH engine was holding that color at the end
+        // Because of the swap, pBlack might point to the original White engine.
+        GtpEngine* winningEngine = (winnerColor == 0) ? pBlack : pWhite;
+
+        // 3. Map back to Arbiter IDs (0 = Original Black, 1 = Original White)
+        // We compare pointers to the original references passed to the function.
+        if (winningEngine == &blackEngineRef) {
+            res.winner = 0; // The agent who started as Black won
+        } else {
+            res.winner = 1; // The agent who started as White won
+        }
+    } else {
+        res.winner = -1; // Draw
+        res.finalString = "Move Limit";
+    }
+
+    // 4. Save SGF
+    // We use pBlack/pWhite->getName() so the SGF header correctly shows
+    // which agent ended up playing which color.
+    saveGameToSGF("game_" + std::to_string(gameId) + ".sgf",
+                  pBlack->getName(), // Name of the agent currently playing Black
+                  pWhite->getName(), // Name of the agent currently playing White
+                  winnerColor,       // 0 for B+Resign, 1 for W+Resign (SGF standard)
+                  moveHistory);
+
     return res;
 }
 void worker(std::string cmdA, std::string cmdB, int pairsToPlay, int simLimit, std::atomic<int>& pairsFinished, Stats& stats) {

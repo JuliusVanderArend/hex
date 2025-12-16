@@ -168,7 +168,7 @@ void cmd_genmove(std::stringstream& ss, InferenceServer& globalServer) {
         // result.rootValue is the win probability for the current player (Blue).
         // If < 0.5, it means Red (Player 1) has the advantage.
         // We should swap to take the Red position.
-        if (result.rootValue < 0.5f) {
+        if (result.rootValue < 0.0f) {
             std::cerr << "Eval (" << result.rootValue << ") favors opponent. Swapping." << std::endl;
             gtpResponse("swap");
             globalPos.moveCount++; //will this cause bugs?? because move count no longer equals number of stones on board???

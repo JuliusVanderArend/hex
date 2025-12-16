@@ -383,7 +383,7 @@ GameSamples playAgentGame(MCTS& agent, InferenceServer& server, int simulations)
         if (pos.moveCount == 1) {
             // If we (Blue) have < 50% win rate, Red's opening was too strong. Swap.
             // Note: result.rootValue is from the perspective of the side to move.
-            if (result.rootValue < 0.5f) {
+            if (result.rootValue < 0.0f) {
                 // Execute Swap
                 record.moveHistory.push_back("swap");
                 pos.moveCount++;
