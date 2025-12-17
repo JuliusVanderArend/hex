@@ -303,7 +303,7 @@ GameSamples playMohexGame(GtpEngine& engine) {
     	// --- RESIGN ---
     	if (bestMove == -2) {
        		// текущий игрок сдался → победил другой
-    	    std::cerr << "swap" << std::endl;
+    	    std::cerr << "resign" << std::endl;
         	record.winner = 1 - pos.sideToMove;
         	//break;
     	}
@@ -322,6 +322,7 @@ GameSamples playMohexGame(GtpEngine& engine) {
     	// --- Ошибка ---
     	if (bestMove < 0 || bestMove >= BOARD_AREA) {
     	    std::cerr << "nigga" << std::endl;
+    	    record.winner = -1;
         	break;
     	}
 
@@ -540,7 +541,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    unsigned int nThreads = 32;
+    unsigned int nThreads = 24;
     // if (mode == Mode::AGENT) nThreads = 6;
 
     std::cout << "Starting Self-Play | Mode: " << (mode == Mode::MOHEX ? "MOHEX" : "AGENT") << std::endl;
