@@ -2,14 +2,19 @@
 project(Group49)
 
 set(CMAKE_CXX_STANDARD 20)
-# GCC Optimization flags (Now safe to use again!)
-add_compile_options(-O3 -march=native -Wall)
+# Optimization flags
+if(APPLE)
+    add_compile_options(-O3 -Wall)
+    # macOS: Use Homebrew's ONNX Runtime
+    set(ONNX_ROOT "/opt/homebrew/opt/onnxruntime")
+    include_directories(${ONNX_ROOT}/include/onnxruntime)
+else()
+    add_compile_options(-O3 -march=native -Wall)
+    # Linux: Use local ONNX Runtime
+    set(ONNX_ROOT "$ENV{HOME}/libs/onnxruntime")
+    include_directories(${ONNX_ROOT}/include)
+endif()
 
-# 1. DEFINE PATH (Linux Path inside WSL)
-# TIP: Use $ENV{HOME} to represent /home/your_user
-set(ONNX_ROOT "$ENV{HOME}/libs/onnxruntime")
-
-include_directories(${ONNX_ROOT}/include)
 link_directories(${ONNX_ROOT}/lib)
 
 # 2. DEFINE EXECUTABLES
@@ -25,23 +30,36 @@ add_executable(Group49SelfPlay
         src/InferenceServer.h
 )
 
-# 3. LINK LIBRARIES (Simple and Clean)
-# Linux finds libonnxruntime.so automatically via link_directories
+# 3. LINK LIBRARIES
 target_link_libraries(Group49 onnxruntime)
 target_link_libraries(Group49SelfPlay onnxruntime)
 
-# 4. COPY SHARED OBJECT (.so)
-# In Linux, we copy .so.1.19.2 (the versioned file) or the symbolic link
-add_custom_command(TARGET Group49 POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${ONNX_ROOT}/lib/libonnxruntime.so.1.23.2"
-        $<TARGET_FILE_DIR:Group49>/libonnxruntime.so.1.23.2)
+# 4. Platform-specific library handling
+if(APPLE)
+    # macOS: Set RPATH to find dylib at runtime
+    set_target_properties(Group49 PROPERTIES
+        BUILD_RPATH "${ONNX_ROOT}/lib"
+        INSTALL_RPATH "${ONNX_ROOT}/lib"
+    )
+    set_target_properties(Group49SelfPlay PROPERTIES
+        BUILD_RPATH "${ONNX_ROOT}/lib"
+        INSTALL_RPATH "${ONNX_ROOT}/lib"
+    )
+else()
+    # Linux: Copy .so file
+    add_custom_command(TARGET Group49 POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${ONNX_ROOT}/lib/libonnxruntime.so.1.23.2"
+            $<TARGET_FILE_DIR:Group49>/libonnxruntime.so.1.23.2)
 
-add_custom_command(TARGET Group49SelfPlay POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${ONNX_ROOT}/lib/libonnxruntime.so.1.23.2"
-        $<TARGET_FILE_DIR:Group49SelfPlay>/libonnxruntime.so.1.23.2)
+    add_custom_command(TARGET Group49SelfPlay POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${ONNX_ROOT}/lib/libonnxruntime.so.1.23.2"
+            $<TARGET_FILE_DIR:Group49SelfPlay>/libonnxruntime.so.1.23.2)
+endif()
+
 add_executable(Arbiter arbiter.cpp src/Position.cpp src/Util.cpp)
+
 # --- TESTS ---
 include(FetchContent)
 FetchContent_Declare(googletest URL https://github.com/google/googletest/archive/refs/heads/main.zip)
@@ -50,15 +68,20 @@ FetchContent_MakeAvailable(googletest)
 add_executable(HexTests tests/tests.cpp
         src/InferenceServer.h)
 target_sources(HexTests PRIVATE src/Position.cpp src/Util.cpp src/Inference.cpp)
-#target_sources(HexTests PRIVATE src/Position.cpp src/Util.cpp)
 
 target_link_libraries(HexTests PRIVATE gtest_main onnxruntime)
 
-# Copy .so for tests too
-add_custom_command(TARGET HexTests POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${ONNX_ROOT}/lib/libonnxruntime.so.1.23.2"
-        $<TARGET_FILE_DIR:HexTests>/libonnxruntime.so.1.23.2)
+if(APPLE)
+    set_target_properties(HexTests PROPERTIES
+        BUILD_RPATH "${ONNX_ROOT}/lib"
+        INSTALL_RPATH "${ONNX_ROOT}/lib"
+    )
+else()
+    add_custom_command(TARGET HexTests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${ONNX_ROOT}/lib/libonnxruntime.so.1.23.2"
+            $<TARGET_FILE_DIR:HexTests>/libonnxruntime.so.1.23.2)
+endif()
 
 include(GoogleTest)
 gtest_discover_tests(HexTests)

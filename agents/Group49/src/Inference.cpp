@@ -31,7 +31,9 @@ public:
     {
         Ort::SessionOptions session_options;
         session_options.SetIntraOpNumThreads(1);
+#ifdef USE_CUDA
         OrtSessionOptionsAppendExecutionProvider_CUDA(session_options, 0);
+#endif
         session_options.SetGraphOptimizationLevel(
             GraphOptimizationLevel::ORT_ENABLE_ALL);
 

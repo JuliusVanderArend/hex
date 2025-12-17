@@ -1,0 +1,3 @@
+/Users/serhiitupikin/Documents/Coding/University/hex/agents/Group49/build-macos/_deps/googletest-subbuild/CMakeFiles/googletest-populate.dir
+/Users/serhiitupikin/Documents/Coding/University/hex/agents/Group49/build-macos/_deps/googletest-subbuild/CMakeFiles/edit_cache.dir
+/Users/serhiitupikin/Documents/Coding/University/hex/agents/Group49/build-macos/_deps/googletest-subbuild/CMakeFiles/rebuild_cache.dir

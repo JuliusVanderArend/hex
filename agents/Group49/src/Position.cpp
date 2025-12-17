@@ -1,13 +1,26 @@
 ﻿//
 // Created by Julius on 28/11/2025.
 //
-#include <immintrin.h>
 #include "../src/Position.h"
 
 #include <iomanip>
 #include <iostream>
 
+#if defined(__x86_64__) || defined(_M_X64)
+#include <immintrin.h>
 #pragma GCC target ("bmi2,tune=skylake")
+#else
+// Software fallback for PDEP on ARM/Apple Silicon
+static inline uint64_t _pdep_u64(uint64_t val, uint64_t mask) {
+    uint64_t result = 0;
+    for (uint64_t bit = 1; mask; bit += bit) {
+        if (val & bit)
+            result |= mask & -mask;
+        mask &= mask - 1;
+    }
+    return result;
+}
+#endif
 
 namespace engine {
     Position::Position(int sideToMove)
