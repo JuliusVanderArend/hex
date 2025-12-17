@@ -217,7 +217,7 @@ public:
     void sendCommand(const std::string& cmd) {
         std::string full_cmd = cmd + "\n";
         if (write(pipe_in[1], full_cmd.c_str(), full_cmd.size()) < 0) {}
-        std::cerr << full_cmd << std::endl;
+        // std::cerr << full_cmd << std::endl;
     }
 
     std::string readResponse() {
@@ -237,7 +237,7 @@ public:
     	std::string color = (sideToMove == 0) ? "black" : "white";
     	sendCommand("genmove " + color);
     	std::string resp = readResponse();
-        std::cerr << resp << std::endl;
+        // std::cerr << resp << std::endl;
     	if (resp.empty() || resp[0] != '=')
      	   return -1; // protocol error
 
@@ -321,8 +321,8 @@ GameSamples playMohexGame(GtpEngine& engine) {
 
     	// --- Ошибка ---
     	if (bestMove < 0 || bestMove >= BOARD_AREA) {
-    	    std::cerr << "nigga" << std::endl;
-    	    record.winner = -1;
+    	    std::cerr << "crash" << std::endl;
+    	    record.winner = 1 - pos.sideToMove;
         	break;
     	}
 
@@ -541,7 +541,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    unsigned int nThreads = 24;
+    unsigned int nThreads = 32;
     // if (mode == Mode::AGENT) nThreads = 6;
 
     std::cout << "Starting Self-Play | Mode: " << (mode == Mode::MOHEX ? "MOHEX" : "AGENT") << std::endl;
