@@ -1,6 +1,6 @@
 boardsize 11
 clear_board
-param_mohex num_threads 2
+param_mohex num_threads 1
 param_mohex lock_free 1
 param_mohex virtual_loss 1
 param_mohex reuse_subtree 0

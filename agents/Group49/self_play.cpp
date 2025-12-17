@@ -217,6 +217,7 @@ public:
     void sendCommand(const std::string& cmd) {
         std::string full_cmd = cmd + "\n";
         if (write(pipe_in[1], full_cmd.c_str(), full_cmd.size()) < 0) {}
+        std::cerr << full_cmd << std::endl;
     }
 
     std::string readResponse() {
@@ -236,7 +237,7 @@ public:
     	std::string color = (sideToMove == 0) ? "black" : "white";
     	sendCommand("genmove " + color);
     	std::string resp = readResponse();
-
+        std::cerr << resp << std::endl;
     	if (resp.empty() || resp[0] != '=')
      	   return -1; // protocol error
 
@@ -280,7 +281,7 @@ GameSamples playMohexGame(GtpEngine& engine) {
     engine.init(static_cast<int>(seed));
 
     FastRand rng(seed);
-    int openingMoves = 4;
+    int openingMoves = 0;
     for (int i = 0; i < openingMoves; ++i) {
         if (pos.getWinner() != -1) break;
         int randomMove = pos.getRandomLegalMove(rng);
@@ -302,13 +303,15 @@ GameSamples playMohexGame(GtpEngine& engine) {
     	// --- RESIGN ---
     	if (bestMove == -2) {
        		// текущий игрок сдался → победил другой
+    	    std::cerr << "swap" << std::endl;
         	record.winner = 1 - pos.sideToMove;
-        	break;
+        	//break;
     	}
 
     	// --- SWAP ---
     	if (bestMove == -3) {
     	    // 1. Record History
+    	    std::cerr << "swap" << std::endl;
     	    record.moveHistory.push_back("swap");
     	    // 2. Adjust Logic (Manual Fix)
     	    pos.moveCount++;
@@ -318,10 +321,12 @@ GameSamples playMohexGame(GtpEngine& engine) {
 
     	// --- Ошибка ---
     	if (bestMove < 0 || bestMove >= BOARD_AREA) {
+    	    std::cerr << "nigga" << std::endl;
         	break;
     	}
 
     	// --- Обычный ход ---
+
     	Sample sample;
     	sample.playerToMove = pos.sideToMove;
     	std::vector<float> tensor = pos.toTensor();
@@ -335,9 +340,10 @@ GameSamples playMohexGame(GtpEngine& engine) {
     	sample.policy[bestMove] = 1.0;
     	sample.rootValue = 0.0f;
 
+        pos.makeMove(bestMove);
+
     	record.samples.push_back(sample);
     	record.moveHistory.push_back(moveToString(bestMove));
-    	pos.makeMove(bestMove);
 	}
 
     if (record.winner == -1)
@@ -417,26 +423,6 @@ GameSamples playAgentGame(MCTS& agent, InferenceServer& server, int simulations)
         pos.makeMove(chosenMove);
         movesPlayed++;
     }
-    SearchResult result = agent.searchWithPolicy(pos, server, simulations);
-    double temp = (movesPlayed < TEMP_THRESHOLD) ? 1.0 : 0.0;
-    int chosenMove = pickMoveFromPolicy(result.policy, temp, rng);
-    Sample sample;
-    sample.playerToMove = pos.sideToMove;
-    std::vector<float> tensor = pos.toTensor();
-    sample.red        = extractPlane(tensor, 0);
-    sample.blue       = extractPlane(tensor, 1);
-    sample.turn       = extractPlane(tensor, 2);
-    sample.last_move  = extractPlane(tensor, 3);
-    sample.conn_start = extractPlane(tensor, 4);
-    sample.conn_end   = extractPlane(tensor, 5);
-    sample.policy = result.policy;
-    sample.rootValue = result.rootValue;
-
-    record.samples.push_back(sample);
-
-    // FIX: Record history for main game loop
-    record.moveHistory.push_back(moveToString(chosenMove));
-
 
     record.winner = pos.getWinner();
     if (record.winner == -1) record.winner = 2;
@@ -543,7 +529,7 @@ int main(int argc, char** argv) {
     if (argc > 5 && mode == Mode::AGENT) {
         saveSGF = (std::stoi(argv[5]) != 0);
     }
-    std::string modelPath = "models/best.onnx"; // Default
+    std::string modelPath = "models/hex_run_6.onnx"; // Default
     if (mode == Mode::AGENT && argc > 6) {
         modelPath = argv[6]; // Allow overriding model path
     }
@@ -554,7 +540,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    unsigned int nThreads = 8;
+    unsigned int nThreads = 32;
     // if (mode == Mode::AGENT) nThreads = 6;
 
     std::cout << "Starting Self-Play | Mode: " << (mode == Mode::MOHEX ? "MOHEX" : "AGENT") << std::endl;
