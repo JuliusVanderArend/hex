@@ -29,15 +29,15 @@ using namespace engine;
 
 // --- CONFIGURATION ---
 const std::string MOHEX_PATH =
-    "/home/d4k3rz/benzene-vanilla-cmake/build/src/mohex/mohex";
+    "/home/skynet/git/benzene-vanilla-cmake/build/src/mohex/mohex";
     // "mohex";
 const std::string MOHEX_CONFIG =
-    "/home/d4k3rz/benzene-vanilla-cmake/mohex_selfplay.htp";
-    // "mohex_selfplay.htp";
+    // "/home/skynet/git/benzene-vanilla-cmake/mohex_selfplay.htp";
+    "mohex_selfplay.htp";
 
-const std::string KATAHEX_PATH = "/home/d4k3rz/katahex/build/katahex"; // Или полный путь /home/user/...
-const std::string KATAHEX_CONFIG = "/home/d4k3rz/katahex/build/config.cfg";
-const std::string KATAHEX_MODEL = "/home/d4k3rz/katahex/build/hex27x3.bin.gz";
+const std::string KATAHEX_PATH = "/home/skynet/git/katahex/build/katahex"; // Или полный путь /home/user/...
+const std::string KATAHEX_CONFIG = "/home/skynet/git/katahex/config.cfg";
+const std::string KATAHEX_MODEL = "/home/skynet/git/katahex/hex3_27x_b28.bin.gz";
 
 const int TEMP_THRESHOLD = 20;
 
@@ -258,7 +258,8 @@ public:
 
     	if (moveStr == "resign")
         	return -2;   // Resign value
-
+        if (moveStr == "pass")
+            return -2;
     	if (moveStr == "swap")
         	return -3;   // Swap value
 
@@ -270,6 +271,8 @@ public:
     sendCommand("boardsize 11");
     readResponse();
     sendCommand("clear_board");
+    readResponse();
+    sendCommand("kata-set-param maxVisits 100");
     readResponse();
     // sendCommand("param_mohex random_seed " + std::to_string(seed));
     // readResponse();
@@ -316,7 +319,7 @@ GameSamples playMohexGame(GtpEngine& engine) {
        		// текущий игрок сдался → победил другой
     	    std::cerr << "resign" << std::endl;
         	record.winner = 1 - pos.sideToMove;
-        	//break;
+        	break;
     	}
 
     	// --- SWAP ---
@@ -442,10 +445,19 @@ GameSamples playAgentGame(MCTS& agent, InferenceServer& server, int simulations)
 }
 
 // --- WORKER THREAD ---
+// --- WORKER THREAD ---
 void worker(Mode mode, int totalGames, int simulations, bool saveSGF, std::atomic<int>& gamesPlayed, std::ofstream& out, const std::string& modelPath) {
     std::unique_ptr<Inference> net;
     std::unique_ptr<InferenceServer> server;
     std::unique_ptr<MCTS> mcts_agent;
+
+    // [OPTIMIZATION] Initialize KataHex engine once per thread if in MoHex mode
+    // This prevents the expensive process creation/model load for every single game.
+    std::unique_ptr<GtpEngine> sharedEngine;
+    if (mode == Mode::MOHEX) {
+        // Ensure you use the KATAHEX constants here as discussed for speed
+        sharedEngine = std::make_unique<GtpEngine>(KATAHEX_PATH, KATAHEX_CONFIG, KATAHEX_MODEL);
+    }
 
     if (mode == Mode::AGENT) {
         net = std::make_unique<Inference>(modelPath);
@@ -462,14 +474,17 @@ void worker(Mode mode, int totalGames, int simulations, bool saveSGF, std::atomi
             GameSamples record;
 
             if (mode == Mode::MOHEX) {
-                GtpEngine engine(KATAHEX_PATH, KATAHEX_CONFIG, KATAHEX_MODEL);
-                record = playMohexGame(engine);
+                // Reuse the persistent engine.
+                // playMohexGame calls init() which clears the board, so this is safe.
+                record = playMohexGame(*sharedEngine);
             } else {
                 record = playAgentGame(*mcts_agent, *server, simulations);
             }
 
+            // --- CRITICAL SECTION: FILE I/O ---
             std::lock_guard<std::mutex> lock(io_mutex);
 
+            // 1. Save SGF (Optional)
             if (saveSGF) {
                 std::string fname = "game_" + std::to_string(gameIdx) + ".sgf";
                 std::string bName = (mode == Mode::MOHEX) ? "MoHex" : "Agent";
@@ -477,9 +492,11 @@ void worker(Mode mode, int totalGames, int simulations, bool saveSGF, std::atomi
                 saveGameToSGF(fname, bName, wName, record.winner, record.moveHistory);
             }
 
+            // 2. Save JSONL Data
             for (size_t moveIdx = 0; moveIdx < record.samples.size(); ++moveIdx) {
                 const Sample& sample = record.samples[moveIdx];
                 int value = 0;
+                // Determine Value: 1 (Win), -1 (Loss), 0 (Draw/Error)
                 if (record.winner != 2) {
                     value = (record.winner == sample.playerToMove) ? 1 : -1;
                 }
@@ -500,11 +517,21 @@ void worker(Mode mode, int totalGames, int simulations, bool saveSGF, std::atomi
                     << "}\n";
             }
 
-            if ((gameIdx + 1) % 1 == 0) {
+            // 3. [NEW] Flush to disk every 100 games
+            // 'static' ensures this count is shared across all calls/threads (protected by io_mutex)
+            static int gamesSavedCount = 0;
+            gamesSavedCount++;
+
+            if (gamesSavedCount % 100 == 0) {
+                out.flush(); // Forces the OS to write the buffer to the physical file
+                std::cout << "[Auto-Save] Flushed " << gamesSavedCount << " games to disk." << std::endl;
+            }
+
+            // Log progress
+            if ((gameIdx + 1) % 10 == 0) { // Reduced log frequency slightly to reduce spam
                 std::cout << "Finished " << (mode == Mode::MOHEX ? "MoHex" : "Agent")
                           << " game " << gameIdx + 1 << "/" << totalGames
-                          << " (" << record.samples.size() << " moves) [Thread "
-                          << std::this_thread::get_id() << "]" << std::endl;
+                          << " (" << record.samples.size() << " moves)" << std::endl;
             }
 
         } catch (const std::exception& e) {
@@ -552,7 +579,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    unsigned int nThreads = 16;
+    unsigned int nThreads = 32;
     // if (mode == Mode::AGENT) nThreads = 6;
 
     std::cout << "Starting Self-Play | Mode: " << (mode == Mode::MOHEX ? "MOHEX" : "AGENT") << std::endl;
