@@ -29,9 +29,15 @@ using namespace engine;
 
 // --- CONFIGURATION ---
 const std::string MOHEX_PATH =
-    "mohex";
+    "/home/d4k3rz/benzene-vanilla-cmake/build/src/mohex/mohex";
+    // "mohex";
 const std::string MOHEX_CONFIG =
-    "mohex_selfplay.htp";
+    "/home/d4k3rz/benzene-vanilla-cmake/mohex_selfplay.htp";
+    // "mohex_selfplay.htp";
+
+const std::string KATAHEX_PATH = "/home/d4k3rz/katahex/build/katahex"; // Или полный путь /home/user/...
+const std::string KATAHEX_CONFIG = "/home/d4k3rz/katahex/build/config.cfg";
+const std::string KATAHEX_MODEL = "/home/d4k3rz/katahex/build/hex27x3.bin.gz";
 
 const int TEMP_THRESHOLD = 20;
 
@@ -171,7 +177,7 @@ class GtpEngine {
     pid_t pid;
 
 public:
-    GtpEngine(const std::string& cmd, const std::string& configPath) {
+    GtpEngine(const std::string& cmd, const std::string& configPath, const std::string& modelPath) {
         if (pipe(pipe_in) < 0 || pipe(pipe_out) < 0)
             throw std::runtime_error("Failed to create pipes");
 
@@ -192,12 +198,17 @@ public:
             close(pipe_out[0]);
 
             execl(
-                cmd.c_str(),
-                cmd.c_str(),
-                ("--config=" + configPath).c_str(),
-                nullptr
+                cmd.c_str(),        // Путь к исполняемому файлу
+                "katahex",          // argv[0]: имя процесса
+                "gtp",              // argv[1]: ОБЯЗАТЕЛЬНО режим gtp
+                "-config",          // argv[2]: флаг конфига (отдельно!)
+                configPath.c_str(), // argv[3]: путь к конфигу (отдельно!)
+                "-model",           // argv[4]: флаг модели
+                modelPath.c_str(),  // argv[5]: путь к модели
+                nullptr             // Конец
             );
 
+            perror("Execl failed");
             exit(127);
         } else {
             // Parent
@@ -260,8 +271,8 @@ public:
     readResponse();
     sendCommand("clear_board");
     readResponse();
-    sendCommand("param_mohex random_seed " + std::to_string(seed));
-    readResponse();
+    // sendCommand("param_mohex random_seed " + std::to_string(seed));
+    // readResponse();
 }
 };
 
@@ -372,7 +383,7 @@ GameSamples playAgentGame(MCTS& agent, InferenceServer& server, int simulations)
                       + std::chrono::high_resolution_clock::now().time_since_epoch().count();
     FastRand rng(seed);
 
-    int openingMoves = 2;
+    int openingMoves = 0;
     for(int i=0; i<openingMoves; ++i) {
          if (pos.getWinner() != -1) break;
          int randomMove = pos.getRandomLegalMove(rng);
@@ -451,7 +462,7 @@ void worker(Mode mode, int totalGames, int simulations, bool saveSGF, std::atomi
             GameSamples record;
 
             if (mode == Mode::MOHEX) {
-                GtpEngine engine(MOHEX_PATH, MOHEX_CONFIG);
+                GtpEngine engine(KATAHEX_PATH, KATAHEX_CONFIG, KATAHEX_MODEL);
                 record = playMohexGame(engine);
             } else {
                 record = playAgentGame(*mcts_agent, *server, simulations);
@@ -541,7 +552,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    unsigned int nThreads = 32;
+    unsigned int nThreads = 16;
     // if (mode == Mode::AGENT) nThreads = 6;
 
     std::cout << "Starting Self-Play | Mode: " << (mode == Mode::MOHEX ? "MOHEX" : "AGENT") << std::endl;
