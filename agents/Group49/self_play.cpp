@@ -170,7 +170,6 @@ void saveGameToSGF(const std::string& filename,
     std::cout << "Saved" << filename << std::endl;
 }
 
-// --- GTP ENGINE WRAPPER ---
 class GtpEngine {
     int pipe_in[2];
     int pipe_out[2];
@@ -198,14 +197,14 @@ public:
             close(pipe_out[0]);
 
             execl(
-                cmd.c_str(),        // Путь к исполняемому файлу
-                "katahex",          // argv[0]: имя процесса
-                "gtp",              // argv[1]: ОБЯЗАТЕЛЬНО режим gtp
-                "-config",          // argv[2]: флаг конфига (отдельно!)
-                configPath.c_str(), // argv[3]: путь к конфигу (отдельно!)
-                "-model",           // argv[4]: флаг модели
-                modelPath.c_str(),  // argv[5]: путь к модели
-                nullptr             // Конец
+                cmd.c_str(),        // Executable path
+                "katahex",          // argv[0]
+                "gtp",              // argv[1]
+                "-config",          // argv[2]
+                configPath.c_str(), // argv[3]
+                "-model",           // argv[4]
+                modelPath.c_str(),  // argv[5]
+                nullptr             // End
             );
 
             perror("Execl failed");
@@ -217,7 +216,6 @@ public:
         }
     }
 
-
     ~GtpEngine() {
         sendCommand("quit");
         close(pipe_in[1]);
@@ -228,7 +226,6 @@ public:
     void sendCommand(const std::string& cmd) {
         std::string full_cmd = cmd + "\n";
         if (write(pipe_in[1], full_cmd.c_str(), full_cmd.size()) < 0) {}
-        // std::cerr << full_cmd << std::endl;
     }
 
     std::string readResponse() {
@@ -244,39 +241,47 @@ public:
         return response;
     }
 
+    // [UPDATED] Clean readLine that strips newline chars
+    std::string readLine() {
+        std::string line;
+        char c;
+        while (read(pipe_out[0], &c, 1) > 0) {
+            if (c == '\n' || c == '\r') {
+                if (!line.empty()) break; // Return line if we have data
+                continue; // Skip leading/duplicate newlines
+            }
+            line += c;
+        }
+        return line;
+    }
+
     int getMove(int sideToMove) {
-    	std::string color = (sideToMove == 0) ? "black" : "white";
-    	sendCommand("genmove " + color);
-    	std::string resp = readResponse();
-        // std::cerr << resp << std::endl;
-    	if (resp.empty() || resp[0] != '=')
-     	   return -1; // protocol error
+        std::string color = (sideToMove == 0) ? "black" : "white";
+        sendCommand("genmove " + color);
+        std::string resp = readResponse();
 
-   		std::stringstream ss(resp.substr(1));
-    	std::string moveStr;
-    	ss >> moveStr;
+        if (resp.empty() || resp[0] != '=') return -1; // protocol error
 
-    	if (moveStr == "resign")
-        	return -2;   // Resign value
-        if (moveStr == "pass")
-            return -2;
-    	if (moveStr == "swap")
-        	return -3;   // Swap value
+        std::stringstream ss(resp.substr(1));
+        std::string moveStr;
+        ss >> moveStr;
 
-    	return stringToMove(moveStr);
-}
+        if (moveStr == "resign") return -2;
+        if (moveStr == "pass")   return -4; // PASS detected
+        if (moveStr == "swap")   return -3;
 
+        return stringToMove(moveStr);
+    }
 
     void init(int seed) {
-    sendCommand("boardsize 11");
-    readResponse();
-    sendCommand("clear_board");
-    readResponse();
-    sendCommand("kata-set-param maxVisits 100");
-    readResponse();
-    // sendCommand("param_mohex random_seed " + std::to_string(seed));
-    // readResponse();
-}
+        sendCommand("boardsize 11");
+        readResponse();
+        sendCommand("clear_board");
+        readResponse();
+        // Increase visits slightly for better generation quality
+        sendCommand("kata-set-param maxVisits 100");
+        readResponse();
+    }
 };
 
 struct GameSamples {
@@ -285,6 +290,24 @@ struct GameSamples {
     int winner;
 };
 
+std::string extractBestNonPassMove(const std::string& analysisLine) {
+    std::string marker = "info move ";
+    size_t pos = 0;
+
+    while ((pos = analysisLine.find(marker, pos)) != std::string::npos) {
+        pos += marker.length();
+        size_t end = analysisLine.find(' ', pos);
+        if (end == std::string::npos) end = analysisLine.length();
+
+        std::string move = analysisLine.substr(pos, end - pos);
+        if (move != "pass") {
+            return move;
+        }
+    }
+    return "";
+}
+
+// --- GAME LOOP: MOHEX ---
 // --- GAME LOOP: MOHEX ---
 GameSamples playMohexGame(GtpEngine& engine) {
     Position pos(0);
@@ -295,6 +318,8 @@ GameSamples playMohexGame(GtpEngine& engine) {
     engine.init(static_cast<int>(seed));
 
     FastRand rng(seed);
+
+    // Random Opening Phase
     int openingMoves = 0;
     for (int i = 0; i < openingMoves; ++i) {
         if (pos.getWinner() != -1) break;
@@ -302,8 +327,6 @@ GameSamples playMohexGame(GtpEngine& engine) {
         if (randomMove == -1) break;
 
         std::string color = (pos.sideToMove == 0) ? "black" : "white";
-
-        // Record Move
         record.moveHistory.push_back(moveToString(randomMove));
 
         pos.makeMove(randomMove);
@@ -312,68 +335,119 @@ GameSamples playMohexGame(GtpEngine& engine) {
     }
 
     while (pos.getWinner() == -1) {
-    	int bestMove = engine.getMove(pos.sideToMove);
+        // This implicitly plays the move on the engine if not passed/resigned
+        int bestMove = engine.getMove(pos.sideToMove);
 
-    	// --- RESIGN ---
-    	if (bestMove == -2) {
-       		// текущий игрок сдался → победил другой
-    	    std::cerr << "resign" << std::endl;
-        	record.winner = 1 - pos.sideToMove;
-        	break;
-    	}
+        // --- RESIGN ---
+        if (bestMove == -2) {
+            record.winner = 1 - pos.sideToMove;
+            break;
+        }
 
-    	// --- SWAP ---
-    	if (bestMove == -3) {
-    	    // 1. Record History
-    	    std::cerr << "swap" << std::endl;
-    	    record.moveHistory.push_back("swap");
-    	    // 2. Adjust Logic (Manual Fix)
-    	    pos.moveCount++;
-    	    // 3. Do NOT save a sample (cannot train on swap)
-    	    continue;
-    	}
+        // --- SWAP ---
+        if (bestMove == -3) {
+            record.moveHistory.push_back("swap");
+            pos.moveCount++;
+            continue;
+        }
 
-    	// --- Ошибка ---
-    	if (bestMove < 0 || bestMove >= BOARD_AREA) {
-    	    std::cerr << "crash" << std::endl;
-    	    record.winner = 1 - pos.sideToMove;
-        	break;
-    	}
+        // --- PASS (Forced Win Detected) ---
+        if (bestMove == -4) {
+            // 1. Undo the 'pass' so we can analyze the position
+            engine.sendCommand("undo");
+            engine.readResponse(); // Consumes "= \n\n"
 
-    	// --- Обычный ход ---
+            std::string color = (pos.sideToMove == 0) ? "black" : "white";
 
-    	Sample sample;
-    	sample.playerToMove = pos.sideToMove;
-    	std::vector<float> tensor = pos.toTensor();
-    	sample.red        = extractPlane(tensor, 0);
-    	sample.blue       = extractPlane(tensor, 1);
-    	sample.turn       = extractPlane(tensor, 2);
-    	sample.last_move  = extractPlane(tensor, 3);
-    	sample.conn_start = extractPlane(tensor, 4);
-    	sample.conn_end   = extractPlane(tensor, 5);
-    	sample.policy.fill(0.0);
-    	sample.policy[bestMove] = 1.0;
-    	sample.rootValue = 0.0f;
+            // 2. Force analysis to find the physical move
+            // We use '50' interval. The engine will acknowledge with "=" then stream "info..."
+            engine.sendCommand("lz-analyze " + color + " 50");
+
+            // 3. Robust Read Loop
+            // We read lines until we find one starting with "info move"
+            std::string messyLine;
+            int maxAttempts = 100; // Safety break
+
+            for(int k=0; k<maxAttempts; ++k) {
+                std::string line = engine.readLine();
+
+                // Skip empty lines or just "=" responses
+                if (line.empty() || line == "=") continue;
+
+                if (line.find("info move") != std::string::npos) {
+                    messyLine = line;
+                    break;
+                }
+            }
+
+            // 4. Stop analysis immediately
+            engine.sendCommand("stop");
+            engine.readResponse(); // Consume the "= " response from stop
+
+            // 5. Extract the best move
+            std::string forcedMoveStr = extractBestNonPassMove(messyLine);
+
+            if (!forcedMoveStr.empty()) {
+                // Log the override
+                // std::cout << "[SelfPlay] Overriding pass with " << forcedMoveStr << std::endl;
+
+                // 6. Play the forced move on the engine
+                engine.sendCommand("play " + color + " " + forcedMoveStr);
+
+                // Read response for play command
+                if (engine.readResponse().empty()) {
+                    std::cerr << "Engine sync fail after override" << std::endl;
+                    record.winner = 2; // Error
+                    break;
+                }
+
+                // 7. Update bestMove integer so the rest of the loop proceeds
+                bestMove = stringToMove(forcedMoveStr);
+            } else {
+                // If we genuinely can't find a move (shouldn't happen), treat as resign/loss
+                std::cerr << "[Error] Could not extract move from: " << messyLine << std::endl;
+                record.winner = 1 - pos.sideToMove;
+                break;
+            }
+        }
+        else if (bestMove < 0 || bestMove >= BOARD_AREA) {
+            std::cerr << "Invalid move received: " << bestMove << std::endl;
+            record.winner = 2; // Error
+            break;
+        }
+
+        // --- RECORD SAMPLE (Standard Logic) ---
+        Sample sample;
+        sample.playerToMove = pos.sideToMove;
+        std::vector<float> tensor = pos.toTensor();
+        sample.red        = extractPlane(tensor, 0);
+        sample.blue       = extractPlane(tensor, 1);
+        sample.turn       = extractPlane(tensor, 2);
+        sample.last_move  = extractPlane(tensor, 3);
+        sample.conn_start = extractPlane(tensor, 4);
+        sample.conn_end   = extractPlane(tensor, 5);
+        sample.policy.fill(0.0);
+        sample.policy[bestMove] = 1.0;
+        sample.rootValue = 0.0f;
 
         pos.makeMove(bestMove);
 
-    	record.samples.push_back(sample);
-    	record.moveHistory.push_back(moveToString(bestMove));
-	}
+        record.samples.push_back(sample);
+        record.moveHistory.push_back(moveToString(bestMove));
+    }
 
     if (record.winner == -1)
-    	record.winner = pos.getWinner();
+        record.winner = pos.getWinner();
 
-	if (record.winner == -1)
-    	record.winner = 2; // error
+    if (record.winner == -1)
+        record.winner = 2; // error
 
-	for (auto& sample : record.samples) {
-    	sample.rootValue =
-        	(record.winner == 2) ? 0.0f :
-        	(record.winner == sample.playerToMove ? 1.0f : -1.0f);
-	}
+    for (auto& sample : record.samples) {
+        sample.rootValue =
+            (record.winner == 2) ? 0.0f :
+            (record.winner == sample.playerToMove ? 1.0f : -1.0f);
+    }
 
-	std::cout << "Winner = " << record.winner << std::endl;
     return record;
 }
 
@@ -579,7 +653,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    unsigned int nThreads = 32;
+    unsigned int nThreads = 28;
     // if (mode == Mode::AGENT) nThreads = 6;
 
     std::cout << "Starting Self-Play | Mode: " << (mode == Mode::MOHEX ? "MOHEX" : "AGENT") << std::endl;
