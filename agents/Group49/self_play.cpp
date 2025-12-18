@@ -28,16 +28,16 @@
 using namespace engine;
 
 // --- CONFIGURATION ---
-const std::string MOHEX_PATH =
-    "/home/d4k3rz/benzene-vanilla-cmake/build/src/mohex/mohex";
+// const std::string MOHEX_PATH =
+    // "/home/d4k3rz/benzene-vanilla-cmake/build/src/mohex/mohex";
     // "mohex";
-const std::string MOHEX_CONFIG =
+// const std::string MOHEX_CONFIG =
     // "/home/skynet/git/benzene-vanilla-cmake/mohex_selfplay.htp";
-    "mohex_selfplay.htp";
+    // "mohex_selfplay.htp";
 
-const std::string KATAHEX_PATH = "/home/d4k3rz/katahex/build/katahex"; // Или полный путь /home/user/...
-const std::string KATAHEX_CONFIG = "/home/d4k3rz/katahex/build/config.cfg";
-const std::string KATAHEX_MODEL = "/home/d4k3rz/katahex/build/hex3_27x_b28.bin.gz";
+const std::string KATAHEX_PATH = "/home/skynet/git/katahex/build/katahex"; // Или полный путь /home/user/...
+const std::string KATAHEX_CONFIG = "/home/skynet/git/katahex/config.cfg";
+const std::string KATAHEX_MODEL = "/home/skynet/git/katahex/hex27x3.bin.gz";
 
 const int TEMP_THRESHOLD = 20;
 
@@ -59,6 +59,7 @@ struct Sample {
     std::array<double, BOARD_AREA> policy;
     float rootValue = 0.0f;
 };
+
 
 // --- HELPER FUNCTIONS ---
 
@@ -259,7 +260,7 @@ public:
         std::string color = (sideToMove == 0) ? "black" : "white";
         sendCommand("genmove " + color);
         std::string resp = readResponse();
-        // std::cout << resp << std::endl;
+        std::cout << resp << std::endl;
 
         if (resp.empty() || resp[0] != '=') {
             std::cerr << "Error reading response from engine: " << resp << std::endl;
@@ -277,13 +278,40 @@ public:
     }
 
     void init(int seed) {
+        // std::this_thread::sleep_for(std::chrono::milliseconds(5000));
+        // sendCommand("boardsize 11");
+        // std::cout << "doska gotova" << std::endl;
+        // sendCommand("genmove b");
+        // std::string resp = readResponse();
+        // std::cout << resp << std::endl;
+        // sendCommand("genmove w");
+        // resp = readResponse();
+        // std::cout << resp << std::endl;
+        // sendCommand("genmove w");
+        // resp = readResponse();
+        // std::cout << resp << std::endl;
+        // sendCommand("genmove b");
+        // resp = readResponse();
+        // std::cout << resp << std::endl;
+        // sendCommand("showboard");
+        // resp = readResponse();
+        // std::cout << resp << std::endl;
+
+        // Читаем всё подряд, пока не найдем ответ, начинающийся с '='.
+        // Это проигнорирует "KataGo v1.12...", "WARNING..." и прочий мусор при старте.
         sendCommand("boardsize 11");
+        // std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         readResponse();
+        // std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         sendCommand("clear_board");
+        // std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         readResponse();
+        // std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         // Increase visits slightly for better generation quality
         sendCommand("kata-set-param maxVisits 100");
+        // std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         readResponse();
+        // std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
 };
 
@@ -657,7 +685,8 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    unsigned int nThreads = 8 ;
+    unsigned int nThreads = 4;
+
     // if (mode == Mode::AGENT) nThreads = 6;
 
     std::cout << "Starting Self-Play | Mode: " << (mode == Mode::MOHEX ? "MOHEX" : "AGENT") << std::endl;
