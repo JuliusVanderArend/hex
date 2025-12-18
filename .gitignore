@@ -3,6 +3,11 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# JetBrains IDE / CLion
+.idea/
+*.iml
+cmake-build-*/
+
 # C extensions
 *.so
 

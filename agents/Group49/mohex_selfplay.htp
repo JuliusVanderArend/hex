@@ -14,11 +14,11 @@ param_mohex use_rave 1
 param_mohex randomize_rave_frequency 30
 param_mohex rave_weight_initial 2.12
 param_mohex rave_weight_final 830
-param_mohex max_time 1
+param_mohex max_time 100
 param_mohex use_time_management 0
 param_mohex ponder 0
 param_mohex lazy_delete 1
 param_mohex extend_unstable_search 1
 param_mohex max_memory 16000000000
 param_mohex max_nodes 12000000
-param_mohex max_games 99999999
+param_mohex max_games 100000

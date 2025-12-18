@@ -39,7 +39,8 @@ std::mutex io_mutex;
 
 enum class Mode {
     MOHEX,
-    AGENT
+    AGENT,
+    AGENT_VS_MOHEX
 };
 
 struct Sample {
@@ -248,7 +249,7 @@ public:
     	if (moveStr == "resign")
         	return -2;   // Resign value
 
-    	if (moveStr == "swap")
+    	if (moveStr == "swap" || moveStr == "swap-pieces")
         	return -3;   // Swap value
 
     	return stringToMove(moveStr);
@@ -268,7 +269,7 @@ public:
 struct GameSamples {
     std::vector<Sample> samples;
     std::vector<std::string> moveHistory;
-    int winner;
+    int winner = -1;
 };
 
 // --- GAME LOOP: MOHEX ---
@@ -281,17 +282,14 @@ GameSamples playMohexGame(GtpEngine& engine) {
     engine.init(static_cast<int>(seed));
 
     FastRand rng(seed);
-    int openingMoves = 0;
+    int openingMoves = rng.range(3);  // No random opening moves
     for (int i = 0; i < openingMoves; ++i) {
         if (pos.getWinner() != -1) break;
         int randomMove = pos.getRandomLegalMove(rng);
         if (randomMove == -1) break;
 
         std::string color = (pos.sideToMove == 0) ? "black" : "white";
-
-        // Record Move
         record.moveHistory.push_back(moveToString(randomMove));
-
         pos.makeMove(randomMove);
         engine.sendCommand("play " + color + " " + moveToString(randomMove));
         if (engine.readResponse().empty()) throw std::runtime_error("Engine sync fail");
@@ -302,32 +300,19 @@ GameSamples playMohexGame(GtpEngine& engine) {
 
     	// --- RESIGN ---
     	if (bestMove == -2) {
-       		// текущий игрок сдался → победил другой
     	    std::cerr << "resign" << std::endl;
         	record.winner = 1 - pos.sideToMove;
-        	//break;
+        	break;
     	}
 
-    	// --- SWAP ---
-    	if (bestMove == -3) {
-    	    // 1. Record History
-    	    std::cerr << "swap" << std::endl;
-    	    record.moveHistory.push_back("swap");
-    	    // 2. Adjust Logic (Manual Fix)
-    	    pos.moveCount++;
-    	    // 3. Do NOT save a sample (cannot train on swap)
-    	    continue;
-    	}
-
-    	// --- Ошибка ---
+    	// --- Error (invalid move) ---
     	if (bestMove < 0 || bestMove >= BOARD_AREA) {
     	    std::cerr << "crash" << std::endl;
     	    record.winner = 1 - pos.sideToMove;
         	break;
     	}
 
-    	// --- Обычный ход ---
-
+    	// --- Normal move ---
     	Sample sample;
     	sample.playerToMove = pos.sideToMove;
     	std::vector<float> tensor = pos.toTensor();
@@ -347,6 +332,8 @@ GameSamples playMohexGame(GtpEngine& engine) {
     	record.moveHistory.push_back(moveToString(bestMove));
 	}
 
+    //pos.printPosition();
+
     if (record.winner == -1)
     	record.winner = pos.getWinner();
 
@@ -359,7 +346,8 @@ GameSamples playMohexGame(GtpEngine& engine) {
         	(record.winner == sample.playerToMove ? 1.0f : -1.0f);
 	}
 
-	std::cout << "Winner = " << record.winner << std::endl;
+	std::cout << "Winner = " << pos.getWinner() << std::endl;
+    std::cout << "Winner.winner = " << record.winner << std::endl;
     return record;
 }
 
@@ -372,7 +360,7 @@ GameSamples playAgentGame(MCTS& agent, InferenceServer& server, int simulations)
                       + std::chrono::high_resolution_clock::now().time_since_epoch().count();
     FastRand rng(seed);
 
-    int openingMoves = 2;
+    int openingMoves = rng.range(3); // Randomly pick 0, 1, or 2
     for(int i=0; i<openingMoves; ++i) {
          if (pos.getWinner() != -1) break;
          int randomMove = pos.getRandomLegalMove(rng);
@@ -430,13 +418,121 @@ GameSamples playAgentGame(MCTS& agent, InferenceServer& server, int simulations)
     return record;
 }
 
+// --- GAME LOOP: AGENT VS MOHEX ---
+GameSamples playAgentVsMohexGame(
+    MCTS& agent,
+    InferenceServer& server,
+    GtpEngine& mohex,
+    int simulations,
+    bool agentPlaysBlack  // true = agent is black, false = agent is white
+) {
+    Position pos(0);
+    GameSamples record;
+
+    size_t seed = std::hash<std::thread::id>{}(std::this_thread::get_id())
+                  + std::chrono::high_resolution_clock::now().time_since_epoch().count();
+    FastRand rng(seed);
+    mohex.init(static_cast<int>(seed));
+
+    int movesPlayed = 0;
+
+    while (pos.getWinner() == -1) {
+        // Determine whose turn it is
+        // sideToMove: 0 = black, 1 = white
+        bool isAgentTurn = (pos.sideToMove == 0) == agentPlaysBlack;
+
+        int bestMove;
+
+        if (isAgentTurn) {
+            // Agent's turn - use MCTS with neural network
+            SearchResult result = agent.searchWithPolicy(pos, server, simulations);
+
+            // Handle swap rule for agent when playing as blue (move 1)
+            if (pos.moveCount == 1 && !agentPlaysBlack) {
+                if (result.rootValue < 0.0f) {
+                    record.moveHistory.push_back("swap");
+                    mohex.sendCommand("play white swap-pieces");
+                    mohex.readResponse();
+                    pos.moveCount++;
+                    movesPlayed++;
+                    continue;
+                }
+            }
+
+            double temp = (movesPlayed < TEMP_THRESHOLD) ? 1.0 : 0.0;
+            bestMove = pickMoveFromPolicy(result.policy, temp, rng);
+
+            if (bestMove < 0) break;
+
+            // Record sample for training data
+            Sample sample;
+            sample.playerToMove = pos.sideToMove;
+            std::vector<float> tensor = pos.toTensor();
+            sample.red        = extractPlane(tensor, 0);
+            sample.blue       = extractPlane(tensor, 1);
+            sample.turn       = extractPlane(tensor, 2);
+            sample.last_move  = extractPlane(tensor, 3);
+            sample.conn_start = extractPlane(tensor, 4);
+            sample.conn_end   = extractPlane(tensor, 5);
+            sample.policy = result.policy;
+            sample.rootValue = result.rootValue;
+            record.samples.push_back(sample);
+
+            // Tell MoHex about agent's move
+            std::string color = (pos.sideToMove == 0) ? "black" : "white";
+            mohex.sendCommand("play " + color + " " + moveToString(bestMove));
+            mohex.readResponse();
+        } else {
+            // MoHex's turn
+            bestMove = mohex.getMove(pos.sideToMove);
+
+            if (bestMove == -2) { // Resign
+                std::cerr << "MoHex resigned" << std::endl;
+                record.winner = 1 - pos.sideToMove;
+                break;
+            }
+
+            if (bestMove == -3) { // Swap
+                record.moveHistory.push_back("swap");
+                pos.moveCount++;
+                movesPlayed++;
+                continue;
+            }
+
+            if (bestMove < 0 || bestMove >= BOARD_AREA) {
+                std::cerr << "MoHex error/crash" << std::endl;
+                record.winner = 1 - pos.sideToMove;
+                break;
+            }
+        }
+
+        record.moveHistory.push_back(moveToString(bestMove));
+        pos.makeMove(bestMove);
+        movesPlayed++;
+    }
+
+    if (record.winner == -1) record.winner = pos.getWinner();
+    if (record.winner == -1) record.winner = 2;
+
+    // Update sample values based on outcome
+    for (auto& s : record.samples) {
+        s.rootValue = (record.winner == 2) ? 0.0f
+                    : (record.winner == s.playerToMove ? 1.0f : -1.0f);
+    }
+
+    std::cout << "Agent vs MoHex | Agent=" << (agentPlaysBlack ? "Black" : "White")
+              << " | Winner=" << record.winner << std::endl;
+
+    return record;
+}
+
 // --- WORKER THREAD ---
 void worker(Mode mode, int totalGames, int simulations, bool saveSGF, std::atomic<int>& gamesPlayed, std::ofstream& out, const std::string& modelPath) {
     std::unique_ptr<Inference> net;
     std::unique_ptr<InferenceServer> server;
     std::unique_ptr<MCTS> mcts_agent;
 
-    if (mode == Mode::AGENT) {
+    if (mode == Mode::AGENT || mode == Mode::AGENT_VS_MOHEX) {
         net = std::make_unique<Inference>(modelPath);
         server = std::make_unique<InferenceServer>(*net);
         mcts_agent = std::make_unique<MCTS>();
@@ -453,6 +549,10 @@ void worker(Mode mode, int totalGames, int simulations, bool saveSGF, std::atomi
             if (mode == Mode::MOHEX) {
                 GtpEngine engine(MOHEX_PATH, MOHEX_CONFIG);
                 record = playMohexGame(engine);
+            } else if (mode == Mode::AGENT_VS_MOHEX) {
+                GtpEngine engine(MOHEX_PATH, MOHEX_CONFIG);
+                bool agentPlaysBlack = (gameIdx % 2 == 0);  // Alternate colors each game
+                record = playAgentVsMohexGame(*mcts_agent, *server, engine, simulations, agentPlaysBlack);
             } else {
                 record = playAgentGame(*mcts_agent, *server, simulations);
             }
@@ -461,8 +561,16 @@ void worker(Mode mode, int totalGames, int simulations, bool saveSGF, std::atomi
 
             if (saveSGF) {
                 std::string fname = "game_" + std::to_string(gameIdx) + ".sgf";
-                std::string bName = (mode == Mode::MOHEX) ? "MoHex" : "Agent";
-                std::string wName = (mode == Mode::MOHEX) ? "MoHex" : "Agent";
+                std::string bName, wName;
+                if (mode == Mode::MOHEX) {
+                    bName = "MoHex"; wName = "MoHex";
+                } else if (mode == Mode::AGENT_VS_MOHEX) {
+                    bool agentPlaysBlack = (gameIdx % 2 == 0);
+                    bName = agentPlaysBlack ? "Agent" : "MoHex";
+                    wName = agentPlaysBlack ? "MoHex" : "Agent";
+                } else {
+                    bName = "Agent"; wName = "Agent";
+                }
                 saveGameToSGF(fname, bName, wName, record.winner, record.moveHistory);
             }
 
@@ -490,7 +598,10 @@ void worker(Mode mode, int totalGames, int simulations, bool saveSGF, std::atomi
             }
 
             if ((gameIdx + 1) % 1 == 0) {
-                std::cout << "Finished " << (mode == Mode::MOHEX ? "MoHex" : "Agent")
+                const char* modeName = (mode == Mode::MOHEX) ? "MoHex"
+                                     : (mode == Mode::AGENT_VS_MOHEX) ? "AgentVsMoHex"
+                                     : "Agent";
+                std::cout << "Finished " << modeName
                           << " game " << gameIdx + 1 << "/" << totalGames
                           << " (" << record.samples.size() << " moves) [Thread "
                           << std::this_thread::get_id() << "]" << std::endl;
@@ -507,31 +618,36 @@ int main(int argc, char** argv) {
     std::signal(SIGPIPE, SIG_IGN);
 
     if (argc < 2) {
-        std::cerr << "Usage: ./SelfPlay <mode: mohex|agent> [games] [sims/file] [output_file] [save_sgf 0|1]" << std::endl;
+        std::cerr << "Usage: ./SelfPlay <mode: mohex|agent|agent_vs_mohex> [games] [sims/file] [output_file] [save_sgf 0|1] [model_path]" << std::endl;
         return 1;
     }
 
     std::string modeStr = argv[1];
-    Mode mode = (modeStr == "agent") ? Mode::AGENT : Mode::MOHEX;
+    Mode mode;
+    if (modeStr == "agent") mode = Mode::AGENT;
+    else if (modeStr == "agent_vs_mohex") mode = Mode::AGENT_VS_MOHEX;
+    else mode = Mode::MOHEX;
 
     int games = (argc > 2) ? std::stoi(argv[2]) : 10;
     int simulations = 512;
-    std::string outputPath = (mode == Mode::AGENT) ? "agent_data.jsonl" : "mohex_data.jsonl";
+    bool usesAgent = (mode == Mode::AGENT || mode == Mode::AGENT_VS_MOHEX);
+    std::string outputPath = usesAgent ? "agent_data.jsonl" : "mohex_data.jsonl";
+    if (mode == Mode::AGENT_VS_MOHEX) outputPath = "agent_vs_mohex_data.jsonl";
     bool saveSGF = false;
 
     if (argc > 3) {
-        if (mode == Mode::AGENT) simulations = std::stoi(argv[3]);
+        if (usesAgent) simulations = std::stoi(argv[3]);
         else outputPath = argv[3];
     }
     if (argc > 4) {
-        if (mode == Mode::AGENT) outputPath = argv[4];
+        if (usesAgent) outputPath = argv[4];
         else saveSGF = (std::stoi(argv[4]) != 0);
     }
-    if (argc > 5 && mode == Mode::AGENT) {
+    if (argc > 5 && usesAgent) {
         saveSGF = (std::stoi(argv[5]) != 0);
     }
     std::string modelPath = "models/hex_run_6.onnx"; // Default
-    if (mode == Mode::AGENT && argc > 6) {
+    if (usesAgent && argc > 6) {
         modelPath = argv[6]; // Allow overriding model path
     }
 
@@ -541,12 +657,18 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    unsigned int nThreads = 32;
+    unsigned int nThreads = 10;
     // if (mode == Mode::AGENT) nThreads = 6;
 
-    std::cout << "Starting Self-Play | Mode: " << (mode == Mode::MOHEX ? "MOHEX" : "AGENT") << std::endl;
+    const char* modeNameLog = (mode == Mode::MOHEX) ? "MOHEX"
+                             : (mode == Mode::AGENT_VS_MOHEX) ? "AGENT_VS_MOHEX"
+                             : "AGENT";
+    std::cout << "Starting Self-Play | Mode: " << modeNameLog << std::endl;
     std::cout << "Games: " << games << " | Threads: " << nThreads << " | SGF Logging: " << (saveSGF ? "ON" : "OFF") << std::endl;
-    if (mode == Mode::AGENT) std::cout << "MCTS Simulations: " << simulations << std::endl;
+    if (usesAgent) {
+        std::cout << "MCTS Simulations: " << simulations << std::endl;
+        std::cout << "Model Path: " << modelPath << std::endl;
+    }
 
     std::vector<std::thread> threads;
     std::atomic<int> gamesPlayed{0};
