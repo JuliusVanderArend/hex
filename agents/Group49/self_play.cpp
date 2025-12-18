@@ -674,7 +674,7 @@ int main(int argc, char** argv) {
     if (argc > 5 && mode == Mode::AGENT) {
         saveSGF = (std::stoi(argv[5]) != 0);
     }
-    std::string modelPath = "models/hex_run_6.onnx"; // Default
+    std::string modelPath = "models/best.onnx"; // Default
     if (mode == Mode::AGENT && argc > 6) {
         modelPath = argv[6]; // Allow overriding model path
     }

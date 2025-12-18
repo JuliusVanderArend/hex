@@ -188,12 +188,16 @@ void cmd_genmove(std::stringstream& ss, InferenceServer& globalServer) {
 // MAIN LOOP
 // =============================================================
 
+// REPLACE the start of main() in main.cpp with this:
 int main(int argc, char* argv[]) {
-    // 1. Load Model (Optional: From argv)
-    // std::string modelFile = "/home/julius/git/hex/agents/Group49/models/hex_run_mohex.onnx";
-    // if (argc > 1) modelFile = argv[1];
+    // Default fallback
+    std::string modelPath = "models/best.onnx";
 
-    Inference net(MODEL_PATH);
+    // Accept model path from Arbiter/Command Line
+    if (argc > 1) {
+        modelPath = argv[1];
+    }
+    Inference net(modelPath); // Use the variable, not the constant
     InferenceServer globalServer(net);
     try {
         // If your NeuralNet constructor takes wstring (Windows), convert it.
