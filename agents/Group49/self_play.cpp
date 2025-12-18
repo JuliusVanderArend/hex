@@ -259,9 +259,12 @@ public:
         std::string color = (sideToMove == 0) ? "black" : "white";
         sendCommand("genmove " + color);
         std::string resp = readResponse();
+        std::cout << resp << std::endl;
 
-        if (resp.empty() || resp[0] != '=') return -1; // protocol error
-
+        if (resp.empty() || resp[0] != '=') {
+            std::cerr << "Error reading response from engine: " << resp << std::endl;
+            return -1; // protocol error
+        }
         std::stringstream ss(resp.substr(1));
         std::string moveStr;
         ss >> moveStr;
@@ -653,7 +656,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    unsigned int nThreads = 28;
+    unsigned int nThreads = 1;
     // if (mode == Mode::AGENT) nThreads = 6;
 
     std::cout << "Starting Self-Play | Mode: " << (mode == Mode::MOHEX ? "MOHEX" : "AGENT") << std::endl;
