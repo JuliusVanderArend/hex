@@ -29,15 +29,15 @@ using namespace engine;
 
 // --- CONFIGURATION ---
 const std::string MOHEX_PATH =
-    "/home/skynet/git/benzene-vanilla-cmake/build/src/mohex/mohex";
+    "/home/d4k3rz/benzene-vanilla-cmake/build/src/mohex/mohex";
     // "mohex";
 const std::string MOHEX_CONFIG =
     // "/home/skynet/git/benzene-vanilla-cmake/mohex_selfplay.htp";
     "mohex_selfplay.htp";
 
-const std::string KATAHEX_PATH = "/home/skynet/git/katahex/build/katahex"; // Или полный путь /home/user/...
-const std::string KATAHEX_CONFIG = "/home/skynet/git/katahex/config.cfg";
-const std::string KATAHEX_MODEL = "/home/skynet/git/katahex/hex3_27x_b28.bin.gz";
+const std::string KATAHEX_PATH = "/home/d4k3rz/katahex/build/katahex"; // Или полный путь /home/user/...
+const std::string KATAHEX_CONFIG = "/home/d4k3rz/katahex/build/config.cfg";
+const std::string KATAHEX_MODEL = "/home/d4k3rz/katahex/build/hex3_27x_b28.bin.gz";
 
 const int TEMP_THRESHOLD = 20;
 
@@ -259,7 +259,7 @@ public:
         std::string color = (sideToMove == 0) ? "black" : "white";
         sendCommand("genmove " + color);
         std::string resp = readResponse();
-        std::cout << resp << std::endl;
+        // std::cout << resp << std::endl;
 
         if (resp.empty() || resp[0] != '=') {
             std::cerr << "Error reading response from engine: " << resp << std::endl;
@@ -290,7 +290,7 @@ public:
 struct GameSamples {
     std::vector<Sample> samples;
     std::vector<std::string> moveHistory;
-    int winner;
+    int winner = -1;
 };
 
 std::string extractBestNonPassMove(const std::string& analysisLine) {
@@ -323,7 +323,7 @@ GameSamples playMohexGame(GtpEngine& engine) {
     FastRand rng(seed);
 
     // Random Opening Phase
-    int openingMoves = 0;
+    int openingMoves = 1;
     for (int i = 0; i < openingMoves; ++i) {
         if (pos.getWinner() != -1) break;
         int randomMove = pos.getRandomLegalMove(rng);
@@ -575,6 +575,7 @@ void worker(Mode mode, int totalGames, int simulations, bool saveSGF, std::atomi
                 int value = 0;
                 // Determine Value: 1 (Win), -1 (Loss), 0 (Draw/Error)
                 if (record.winner != 2) {
+                    // std::cerr << "Record winner: " << record.winner<< "playertomove"<< sample.playerToMove << std::endl;
                     value = (record.winner == sample.playerToMove) ? 1 : -1;
                 }
 
@@ -656,7 +657,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    unsigned int nThreads = 1;
+    unsigned int nThreads = 8 ;
     // if (mode == Mode::AGENT) nThreads = 6;
 
     std::cout << "Starting Self-Play | Mode: " << (mode == Mode::MOHEX ? "MOHEX" : "AGENT") << std::endl;
