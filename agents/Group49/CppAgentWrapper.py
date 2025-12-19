@@ -1,4 +1,5 @@
-﻿from subprocess import Popen, PIPE
+import os
+from subprocess import Popen, PIPE
 from copy import deepcopy
 
 from src.AgentBase import AgentBase
@@ -33,16 +34,29 @@ class CppAgentWrapper(AgentBase):
     def __init__(self, colour: Colour):
         super().__init__(colour)
 
+        # Get the directory where this script is located
+        agent_dir = os.path.dirname(os.path.abspath(__file__))
+        lib_path = os.path.join(agent_dir, "lib")
+
+        # Set LD_LIBRARY_PATH for ONNX Runtime
+        env = os.environ.copy()
+        env["LD_LIBRARY_PATH"] = lib_path
+
+        # Get plain "R" or "B" (not ANSI colored)
+        colour_char = "R" if colour == Colour.RED else "B"
+
         # Launch the compiled C++ agent
         self.agent_process = Popen(
             [
-                "./agents/Group49/cpp_agent",
-                colour.get_char(colour),  # "R" or "B"
+                os.path.join(agent_dir, "Group49"),
+                colour_char,
                 "11",
             ],
             stdin=PIPE,
             stdout=PIPE,
             text=True,
+            env=env,
+            cwd=agent_dir,
         )
 
     def make_move(self, turn: int, board: Board, opp_move: Move | None) -> Move:
@@ -59,8 +73,10 @@ class CppAgentWrapper(AgentBase):
             for tile in row:
                 if tile.colour is None:
                     s += "0"
+                elif tile.colour == Colour.RED:
+                    s += "R"
                 else:
-                    s += tile.colour.get_char(tile.colour)
+                    s += "B"
             board_strings.append(s)
 
         board_string = ",".join(board_strings)
