@@ -25,7 +25,7 @@ WINDOW_SIZE = 15
 # Evaluation
 EVAL_GAMES = 64
 EVAL_SIMS = 192
-WIN_THRESHOLD = 0.52
+WIN_THRESHOLD = 0.51
 
 # --- PATHS SETUP ---
 # 1. Define the relative path from where you RUN the script (3 levels up)
