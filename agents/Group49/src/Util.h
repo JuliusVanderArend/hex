@@ -20,7 +20,7 @@ namespace engine {
     constexpr int BOARD_AREA = BOARD_SIZE * BOARD_SIZE; // 121
     constexpr int MAX_MOVES  = BOARD_AREA;
 
-    const std::string MODEL_PATH = "/home/d4k3rz/hex/agents/Group49/models/best256";
+    const std::string MODEL_PATH = "models/best256";
 
 
     constexpr Move V_START = 121; // Top (Red) / Left (Blue)

@@ -1,4 +1,5 @@
-﻿from subprocess import Popen, PIPE
+import os
+from subprocess import Popen, PIPE
 from copy import deepcopy
 
 from src.AgentBase import AgentBase
@@ -33,16 +34,29 @@ class CppAgentWrapper(AgentBase):
     def __init__(self, colour: Colour):
         super().__init__(colour)
 
+        # --- FIX: LOCATE DEPENDENCIES ---
+        # Get the absolute path to this script's directory (agents/Group49/)
+        cwd = os.path.dirname(os.path.abspath(__file__))
+
+        # --- FIX: UPDATE LIBRARY PATH ---
+        # Create a copy of the environment variables
+        env = os.environ.copy()
+        # Prepend the current directory to LD_LIBRARY_PATH
+        # This tells the loader (and plugins) to look for libcudnn.so.9 HERE.
+        env["LD_LIBRARY_PATH"] = f"{cwd}:{env.get('LD_LIBRARY_PATH', '')}"
+
         # Launch the compiled C++ agent
         self.agent_process = Popen(
             [
-                "./agents/Group49/cpp_agent",
+                "./cpp_agent",            # Now relative to cwd
                 colour.get_char(colour),  # "R" or "B"
                 "11",
             ],
             stdin=PIPE,
             stdout=PIPE,
             text=True,
+            cwd=cwd,   # CRITICAL: Run inside agents/Group49 so it finds models/libs
+            env=env    # CRITICAL: Pass the environment with LD_LIBRARY_PATH
         )
 
     def make_move(self, turn: int, board: Board, opp_move: Move | None) -> Move:
