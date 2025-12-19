@@ -27,15 +27,7 @@
 
 using namespace engine;
 
-// --- CONFIGURATION ---
-// const std::string MOHEX_PATH =
-    // "/home/d4k3rz/benzene-vanilla-cmake/build/src/mohex/mohex";
-    // "mohex";
-// const std::string MOHEX_CONFIG =
-    // "/home/skynet/git/benzene-vanilla-cmake/mohex_selfplay.htp";
-    // "mohex_selfplay.htp";
-
-const std::string KATAHEX_PATH = "/home/skynet/git/katahex/build/katahex"; // Или полный путь /home/user/...
+const std::string KATAHEX_PATH = "/home/skynet/git/katahex/build/katahex";
 const std::string KATAHEX_CONFIG = "/home/skynet/git/katahex/config.cfg";
 const std::string KATAHEX_MODEL = "/home/skynet/git/katahex/hex27x3.bin.gz";
 
@@ -674,9 +666,9 @@ int main(int argc, char** argv) {
     if (argc > 5 && mode == Mode::AGENT) {
         saveSGF = (std::stoi(argv[5]) != 0);
     }
-    std::string modelPath = "models/best.onnx"; // Default
+    std::string modelPath = "models/best.onnx";
     if (mode == Mode::AGENT && argc > 6) {
-        modelPath = argv[6]; // Allow overriding model path
+        modelPath = argv[6];
     }
 
     std::ofstream out(outputPath, std::ios::out | std::ios::trunc);

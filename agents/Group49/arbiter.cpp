@@ -21,7 +21,6 @@
 
 using namespace engine;
 
-// --- CONFIGURATION ---
 const int OPENING_PLIES = 8;
 const int SAFETY_LIMIT = 200;
 
@@ -42,7 +41,6 @@ struct Stats {
     int gamesPlayed = 0;
 };
 
-// --- HELPER FUNCTIONS ---
 void saveGameToSGF(const std::string& filename,
                    const std::string& blackName,
                    const std::string& whiteName,
@@ -52,21 +50,17 @@ void saveGameToSGF(const std::string& filename,
     std::ofstream file(filename);
     if (!file.is_open()) return;
 
-    // SGF Header
-    // GM[11] = Hex, SZ[11] = Size 11x11
+
     file << "(;FF[4]GM[11]SZ[11]\n";
     file << "PB[" << blackName << "]PW[" << whiteName << "]\n";
 
-    // Result
     if (winner == 0) file << "RE[B+Resign]\n";
     else if (winner == 1) file << "RE[W+Resign]\n";
     else file << "RE[Draw]\n";
 
     file << "DT[" << __DATE__ << "]\n";
 
-    // Write Moves
     for (size_t i = 0; i < moves.size(); ++i) {
-        // Even indices (0, 2...) are Black, Odd (1, 3...) are White
         char player = (i % 2 == 0) ? 'B' : 'W';
         file << ";" << player << "[" << moves[i] << "]\n";
     }
@@ -83,14 +77,11 @@ std::vector<std::string> splitCommand(const std::string& cmd) {
     return args;
 }
 
-// Extracts "Group49" from "./cmake-build/Group49"
 std::string getBaseName(const std::string& path) {
     std::string clean = path;
-    // Remove args first
     size_t space = clean.find(' ');
     if (space != std::string::npos) clean = clean.substr(0, space);
 
-    // Find last slash
     size_t lastSlash = clean.find_last_of("/\\");
     if (lastSlash != std::string::npos) clean = clean.substr(lastSlash + 1);
 
@@ -107,7 +98,7 @@ std::string moveToString(int move) {
 }
 
 int stringToMove(std::string s) {
-    if (s == "swap") return -2; // Special code for Swap
+    if (s == "swap") return -2;
     if (s.length() < 2) return -1;
     char colChar = std::tolower(s[0]);
     std::string rowStr = s.substr(1);
@@ -122,7 +113,6 @@ void printHexBoard(const Position& pos) {
     pos.printPosition();
 }
 
-// --- ROBUST GTP ENGINE ---
 class GtpEngine {
     int pipe_in[2];
     int pipe_out[2];
@@ -132,7 +122,6 @@ class GtpEngine {
 
 public:
     GtpEngine(const std::string& cmdLine) {
-        // Dynamic Name Extraction
         name = getBaseName(cmdLine);
 
         if (pipe(pipe_in) < 0 || pipe(pipe_out) < 0) throw std::runtime_error("Pipe failed");
@@ -182,7 +171,6 @@ public:
         unlink(logFilePath.c_str());
     }
 
-    // Parse the temporary log file to find "Score X.XX"
     std::string findScoreInLogs() {
         std::ifstream logFile(logFilePath);
         if (!logFile.is_open()) return "N/A";
@@ -190,7 +178,6 @@ public:
         std::string line;
         std::string lastScore = "";
 
-        // Simple scan: Read entire file (it's short per game usually) and find last "Score"
         while (std::getline(logFile, line)) {
             size_t found = line.find("Score");
             if (found != std::string::npos) {
@@ -246,51 +233,21 @@ public:
         sendCommand("clear_board");
         r = readResponse();
         std::cout << r << std::endl;
-        // if (simLimit > 0) {
-        //     sendCommand("param_mohex max_games " + std::to_string(simLimit));
-        //     readResponse(); // Consume potential error silently
-        // }
-
-        // sendCommand("param_mohex max_threads 1");
-        // readResponse();
-
-        // sendCommand("param_wolve max_threads 1");
-        // readResponse();
-        //
-        // std::string cmd = "time_settings " + std::to_string((int)0.5) + " 0 0";
-        // sendCommand(cmd);
-        // readResponse();
-        //
-        // // Also try explicit param (for safety)
-        // // MoHex:
-        // sendCommand("param_mohex max_time " + std::to_string(0.5));
-        // readResponse(); // Ignore error if not MoHex
-        //
-        // // Wolve:
-        // sendCommand("param_wolve max_time " + std::to_string(0.5));
-        // readResponse(); // Ignore error if not Wolve
-
     }
 
     std::string getName() const { return name; }
 };
 
-// --- GAME LOGIC ---
-
-// Helper to peek at MoHex's evaluation without advancing the game state
 std::string getMoHexEval(GtpEngine& mohex, int sideToMove) {
     std::string color = (sideToMove == 0) ? "black" : "white";
 
-    // 1. Ask for a move (implies search/eval)
     mohex.sendCommand("genmove " + color);
     std::string resp = mohex.readResponse();
 
     if (resp.empty() || resp[0] != '=') return "Crash/Error";
 
-    // 2. Extract score from the side-channel logs
     std::string score = mohex.findScoreInLogs();
 
-    // 3. Undo the move so the actual game loop can proceed normally
     mohex.sendCommand("undo");
     mohex.readResponse();
 
@@ -300,10 +257,9 @@ std::string getMoHexEval(GtpEngine& mohex, int sideToMove) {
 GameResult playSingleGame(GtpEngine& blackEngineRef, GtpEngine& whiteEngineRef, int blackID, uint64_t seed, int simLimit, int gameId) {
     Position pos(0);
     GameResult res;
-    res.blackEngineID = blackID; // Tracks who STARTED as Black
+    res.blackEngineID = blackID;
     std::vector<std::string> moveHistory;
 
-    // Use pointers so we can swap them if the Pie Rule is invoked
     GtpEngine* pBlack = &blackEngineRef;
     GtpEngine* pWhite = &whiteEngineRef;
 
@@ -312,7 +268,6 @@ GameResult playSingleGame(GtpEngine& blackEngineRef, GtpEngine& whiteEngineRef, 
 
     FastRand rng(seed);
 
-    // --- OPENING PHASE (Random) ---
     for (int i = 0; i < OPENING_PLIES; ++i) {
         if (pos.getWinner() != -1) break;
         int move = pos.getRandomLegalMove(rng);
@@ -363,24 +318,17 @@ GameResult playSingleGame(GtpEngine& blackEngineRef, GtpEngine& whiteEngineRef, 
         moveHistory.push_back(moveStr);
 
         if (moveStr == "swap") {
-            // --- SWAP LOGIC ---
             if (moves != 1) {
                 std::cerr << ">>> SWAP LOGIC ERROR: Expected move 1, got " << moves << "!" << std::endl;
                 res.crashed = true;
                 return res;
             }
 
-            // 1. Tell the other engine that a swap happened
             other->sendCommand("play " + colorStr + " swap");
             other->readResponse();
 
-            // 2. Swap the pointers!
-            // The engine that WAS White becomes Black, and vice versa.
             std::swap(pBlack, pWhite);
             std::cout << ">>> SWAP! Engines switched sides." << std::endl;
-            // 3. Update State
-            // Do NOT call pos.makeMove(). Board stones don't change.
-            // But we increment counters to keep game flow correct.
             pos.moveCount++;
             moves++;
 
@@ -388,7 +336,7 @@ GameResult playSingleGame(GtpEngine& blackEngineRef, GtpEngine& whiteEngineRef, 
                 std::lock_guard<std::mutex> lock(print_mutex);
                 std::cout << "Move " << moves << " | SWAP! Engines switched sides." << std::endl;
             }
-            continue; // Skip the rest of the loop
+            continue;
         }
         if (moveStr == "resign") {
             res.winner = (pos.sideToMove == 0) ? 1 : 0;
@@ -400,7 +348,6 @@ GameResult playSingleGame(GtpEngine& blackEngineRef, GtpEngine& whiteEngineRef, 
         }
 
 
-        // ... (Standard Resign/Move handling remains the same) ...
         int move = stringToMove(moveStr);
         if (!pos.isMoveLegal(move)) {
             res.crashed = true;
@@ -421,34 +368,27 @@ GameResult playSingleGame(GtpEngine& blackEngineRef, GtpEngine& whiteEngineRef, 
         other->readResponse();
     }
 
-    int winnerColor = pos.getWinner(); // 0 = Black(Red), 1 = White(Blue), -1 = Draw
+    int winnerColor = pos.getWinner();
 
     if (winnerColor != -1) {
         res.finalString = "Checkmate";
 
-        // 2. Identify WHICH engine was holding that color at the end
-        // Because of the swap, pBlack might point to the original White engine.
         GtpEngine* winningEngine = (winnerColor == 0) ? pBlack : pWhite;
 
-        // 3. Map back to Arbiter IDs (0 = Original Black, 1 = Original White)
-        // We compare pointers to the original references passed to the function.
         if (winningEngine == &blackEngineRef) {
-            res.winner = 0; // The agent who started as Black won
+            res.winner = 0;
         } else {
-            res.winner = 1; // The agent who started as White won
+            res.winner = 1;
         }
     } else {
-        res.winner = -1; // Draw
+        res.winner = -1;
         res.finalString = "Move Limit";
     }
 
-    // 4. Save SGF
-    // We use pBlack/pWhite->getName() so the SGF header correctly shows
-    // which agent ended up playing which color.
     saveGameToSGF("game_" + std::to_string(gameId) + ".sgf",
-                  pBlack->getName(), // Name of the agent currently playing Black
-                  pWhite->getName(), // Name of the agent currently playing White
-                  winnerColor,       // 0 for B+Resign, 1 for W+Resign (SGF standard)
+                  pBlack->getName(),
+                  pWhite->getName(),
+                  winnerColor,
                   moveHistory);
 
     return res;
@@ -458,7 +398,6 @@ void worker(std::string cmdA, std::string cmdB, int pairsToPlay, int simLimit, s
         uint64_t seed = std::hash<std::thread::id>{}(std::this_thread::get_id())
                         + std::chrono::high_resolution_clock::now().time_since_epoch().count();
 
-        // Game 1: A vs B
         int currentPair = pairsFinished.load();
         try {
             GtpEngine engineA(cmdA);
@@ -479,7 +418,6 @@ void worker(std::string cmdA, std::string cmdB, int pairsToPlay, int simLimit, s
             }
         } catch (...) { stats.crashes++; }
 
-        // Game 2: B vs A
         try {
             GtpEngine engineA(cmdA);
             GtpEngine engineB(cmdB);

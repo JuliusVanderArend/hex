@@ -11,14 +11,12 @@ class Inference {
     Ort::Session session{nullptr};
     Ort::MemoryInfo memory_info;
 
-    // Persistent buffers
     std::vector<float> input_buffer;
     std::array<int64_t, 4> input_shape;
     Ort::Value input_tensor{nullptr};
 
     const size_t MAX_BATCH = 128; // has to be the same as in InferenceServer
 
-    // Fixed Input/Output Names
     const char* input_names[1] = {"state"};
     const char* output_names[2] = {"policy", "value"};
 
@@ -37,13 +35,10 @@ public:
 
         session = Ort::Session(env, model_path.c_str(), session_options);
 
-        // Allocate persistent input buffer
         input_buffer.resize(MAX_BATCH * 6 * 121);
 
-        // Default shape (batch size will change dynamically)
         input_shape = {1, 6, 11, 11};
 
-        // Create persistent tensor
         input_tensor = Ort::Value::CreateTensor<float>(
             memory_info,
             input_buffer.data(),
@@ -54,13 +49,10 @@ public:
     }
 
 
-    // --- EXISTING SINGLE PREDICT (Optional, kept for tests) ---
     std::pair<std::vector<float>, float> predict(const engine::Position& pos) {
-        return predictBatch({pos})[0]; // Reuse the batch logic!
+        return predictBatch({pos})[0];
     }
 
-    // --- NEW: BATCH PREDICTION ---
-    // Used by InferenceServer to process multiple positions at once
     std::vector<std::pair<std::vector<float>, float>> predictBatch(const std::vector<engine::Position>& positions) {
         size_t batch_size = positions.size();
         if (batch_size == 0) return {};
@@ -69,18 +61,14 @@ public:
             std::terminate();
         }
 
-
-        // 1. Update dynamic batch size
         input_shape[0] = static_cast<int64_t>(batch_size);
 
-        // 2. Fill persistent input buffer
         for (size_t i = 0; i < batch_size; ++i) {
             positions[i].toTensor(
                 input_buffer.data() + i * 6 * 121
             );
         }
 
-        // 3. Run inference (reuse tensor!)
         auto output_tensors = session.Run(
             Ort::RunOptions{nullptr},
             input_names,
@@ -90,7 +78,6 @@ public:
             2
         );
 
-        // 4. Extract outputs
         float* policy_ptr = output_tensors[0]
             .GetTensorMutableData<float>();
         float* value_ptr = output_tensors[1]

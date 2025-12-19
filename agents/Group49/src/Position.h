@@ -12,34 +12,25 @@
 namespace engine {
 
     struct HexDSU {
-        // 0-120: Board Cells
-        // 121: Virtual START (Top for Red, Left for Blue)
-        // 122: Virtual END   (Bottom for Red, Right for Blue)
-        mutable uint8_t parent[128]; // 'mutable' allows path compression in const methods
+        mutable uint8_t parent[128];
 
-        // Reset to initial state (all disconnected)
         void reset() {
             for (int i = 0; i < 128; ++i) parent[i] = i;
         }
 
-        // Find with Path Compression
         Move find(uint8_t i) const {
             if (parent[i] == i) return i;
             return parent[i] = find(parent[i]);
         }
 
-        // Unite two sets
         void unite(uint8_t i, uint8_t j) {
             uint8_t root_i = find(i);
             uint8_t root_j = find(j);
             if (root_i != root_j) {
-                // Simple linking (Optimization: Union by rank could go here,
-                // but for size 128, it's overkill and adds memory)
                 parent[root_i] = root_j;
             }
         }
 
-        // Check if connected
         bool isConnected(uint8_t start, uint8_t end) const {
             return find(start) == find(end);
         }
@@ -57,9 +48,7 @@ namespace engine {
         Move getRandomLegalMove(FastRand& rng) const;
         int getWinner() const;
 
-        // --- OLD API
         std::vector<float> toTensor() const;
-        // --- NEW API
         void toTensor(float* dst) const;
 
         void printBitboard(Board board) const;
@@ -70,29 +59,21 @@ namespace engine {
         Board getBoardBits(int player) const { return boards[player]; }
         Board getOccupancyBits() const { return occupancy; }
 
-        // Load board from snapshot (used by external engines / wrappers)
         void loadFromSnapshot(const std::vector<std::string>& rows);
 
         int sideToMove = 0;
 
         int moveCount = 0;
         HexDSU dsus[2];
-        // Checks if a move is within bounds and the square is empty
         bool isMoveLegal(int move) const {
             if (move < 0 || move >= BOARD_AREA) return false;
-            // Check if the bit at 'move' is 0 in occupancy
             return !((occupancy >> move) & 1);
         }
 
-        // --- DEBUGGING HELPER ---
-        // verifying that no two stones occupy the same physical square.
         void checkConsistency() const {
             for (int i = 0; i < BOARD_AREA; ++i) {
-                // Red (0) is stored normally: Index i maps to Bit i
                 bool redClaim = (boards[0] >> i) & 1;
 
-                // Blue (1) is stored transposed: Physical Index i maps to Bit transpose(i)
-                // Note: We use the helper function logic here directly or call it if available
                 int r = i / BOARD_SIZE;
                 int c = i % BOARD_SIZE;
                 int transposedIdx = c * BOARD_SIZE + r;
@@ -112,7 +93,7 @@ namespace engine {
             }
         }
     private:
-        Board boards[2]; //frist board is us, second is them (always transposed)
+        Board boards[2];
         Board occupancy = 0;
         Move lastMove = -1;
 

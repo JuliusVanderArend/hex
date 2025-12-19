@@ -10,7 +10,7 @@
 using namespace std;
 using namespace engine;
 
-static constexpr int SEARCH_ITERATIONS = 150000;
+static constexpr int SEARCH_ITERATIONS = 100000;
 
 vector<string> split(const string& s, char delim) {
     vector<string> elems;
@@ -36,6 +36,10 @@ int main(int argc, char* argv[]) {
 
     Position pos(myColour == "R" ? 0 : 1);
 
+    const int OPENING_X = 0;
+    const int OPENING_Y = 1;
+    const float SWAP_THRESHOLD = -0.05f;
+
     string line;
     while (getline(cin, line)) {
         if (line.empty()) continue;
@@ -47,36 +51,49 @@ int main(int argc, char* argv[]) {
         string moveStr = parts[1];
         int turn = stoi(parts[3]);
 
-        // ===== INIT =====
         if (command == "START") {
             pos = Position(myColour == "R" ? 0 : 1);
         }
-
-        // ===== APPLY OPPONENT MOVE =====
         else if (command == "CHANGE") {
             int x, y;
             sscanf(moveStr.c_str(), "%d,%d", &x, &y);
             pos.makeMove(y * BOARD_SIZE + x);
         }
-
         else if (command == "SWAP") {
             pos.sideToMove ^= 1;
         }
 
-        // ===== THINK =====
-        SearchResult result = mcts.searchWithPolicy(
-            pos, server, SEARCH_ITERATIONS
-        );
+        int bestMove = -1;
+        bool doSwap = false;
 
-        int bestMove = result.bestMove;
+        if (pos.moveCount == 0) {
+            bestMove = OPENING_Y * BOARD_SIZE + OPENING_X;
+        }
+        else if (pos.moveCount == 1) {
+            SearchResult result = mcts.searchWithPolicy(pos, server, SEARCH_ITERATIONS);
 
-        // ===== PLAY MOVE =====
-        pos.makeMove(bestMove);
+            if (result.rootValue < SWAP_THRESHOLD) {
+                doSwap = true;
+            } else {
+                bestMove = result.bestMove;
+            }
+        }
+        else {
+            SearchResult result = mcts.searchWithPolicy(pos, server, SEARCH_ITERATIONS);
+            bestMove = result.bestMove;
+        }
 
-        int x = bestMove % BOARD_SIZE;
-        int y = bestMove / BOARD_SIZE;
-        cout << x << "," << y << "\n";
-        cout.flush();
+        if (doSwap) {
+            cout << "SWAP" << "\n";
+            cout.flush();
+            pos.sideToMove ^= 1;
+        } else {
+            pos.makeMove(bestMove);
+            int x = bestMove % BOARD_SIZE;
+            int y = bestMove / BOARD_SIZE;
+            cout << x << "," << y << "\n";
+            cout.flush();
+        }
     }
 
     return 0;

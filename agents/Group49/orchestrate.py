@@ -24,11 +24,8 @@ EVAL_SIMS = 400
 WIN_THRESHOLD = 0.55
 
 # --- PATHS SETUP ---
-# 1. Define the relative path from where you RUN the script (3 levels up)
 HEX_NN_RELATIVE = "../../../hex_nn"
 
-# 2. Convert it to a full path (e.g., /home/skynet/git/hex_nn)
-# This removes all ambiguity for the C++ engine.
 HEX_NN_ABS = os.path.abspath(HEX_NN_RELATIVE)
 
 PATHS = {
@@ -37,15 +34,15 @@ PATHS = {
     "arbiter":   "./cmake-build-release/Arbiter",
     "engine":    "./cmake-build-release/Group49",
 
-    # Python Scripts (Use HEX_NN_ABS)
+    # Python Scripts
     "train":     os.path.join(HEX_NN_ABS, "train.py"),
     "export":    os.path.join(HEX_NN_ABS, "export_onnx.py"),
 
-    # Directories (Use HEX_NN_ABS)
+    # Directories
     "model_dir": os.path.join(HEX_NN_ABS, "models"),
     "data_dir":  os.path.join(HEX_NN_ABS, "data"),
 
-    # Files (Use HEX_NN_ABS)
+    # Files
     "initial_checkpoint": os.path.join(HEX_NN_ABS, "checkpoints/run_001/best.pt"),
     "champion_pt":        os.path.join(HEX_NN_ABS, "models/champion.pt"),
     "best_onnx":          os.path.join(HEX_NN_ABS, "models/best.onnx"),
@@ -73,20 +70,16 @@ def run_command(cmd, log_file=None):
 def initialize_workspace():
     """Sets up directories and ensures the first Champion exists."""
     os.makedirs("logs", exist_ok=True)
-    # Create the destination dirs in hex_nn if they don't exist
     os.makedirs(f"{PATHS['model_dir']}/archive", exist_ok=True)
     os.makedirs(PATHS['data_dir'], exist_ok=True)
 
-    # 1. Check if we have a champion.pt to train from
     if not os.path.exists(PATHS["champion_pt"]):
         print(f">>> Initializing Champion from {PATHS['initial_checkpoint']}...")
         if not os.path.exists(PATHS["initial_checkpoint"]):
-            # Print current working directory to help debug if it fails again
             print(f"   [Debug] CWD: {os.getcwd()}")
             raise FileNotFoundError(f"Cannot find initial checkpoint at {PATHS['initial_checkpoint']}")
         shutil.copy(PATHS["initial_checkpoint"], PATHS["champion_pt"])
 
-    # 2. Check if we have a best.onnx to generate data with
     if not os.path.exists(PATHS["best_onnx"]):
         print(f">>> Warning: {PATHS['best_onnx']} not found. Attempting to export from champion...")
         export_model(PATHS["champion_pt"], PATHS["best_onnx"])
@@ -118,7 +111,6 @@ def generate_data(iter_num):
 def train_student(iter_num):
     print(f">>> [Iter {iter_num}] TRAINING STUDENT (Fine-Tuning)")
 
-    # 1. Select Replay Buffer (Last N valid files)
     all_files = sorted(glob.glob(f"{PATHS['data_dir']}/*.jsonl"))
     valid_files = [f for f in all_files if os.path.getsize(f) > 0]
     train_files = valid_files[-WINDOW_SIZE:]
@@ -128,7 +120,6 @@ def train_student(iter_num):
 
     print(f"   Training on {len(train_files)} files.")
 
-    # 2. Run train.py
     cmd = [
               "python3", PATHS["train"],
               "--data"] + train_files + [
@@ -154,19 +145,15 @@ def get_latest_candidate_pt():
     Finds the best available candidate file.
     If 'best.pt' is missing (because loss didn't improve), returns the last epoch.
     """
-    # 1. Try the explicit best.pt
     if os.path.exists(PATHS["candidate_pt"]):
         return PATHS["candidate_pt"]
 
-    # 2. Fallback: Find the latest epoch_X.pt
     pattern = f"{PATHS['candidate_dir']}/epoch_*.pt"
     epoch_files = glob.glob(pattern)
 
     if not epoch_files:
         raise FileNotFoundError(f"No candidate models found in {PATHS['candidate_dir']}")
 
-    # Sort by epoch number (e.g., epoch_2.pt > epoch_1.pt)
-    # Extract number from filename to sort correctly
     latest_file = max(epoch_files, key=lambda f: int(re.search(r"epoch_(\d+).pt", f).group(1)))
 
     print(f"   [!] 'best.pt' not found (loss didn't improve). Using latest epoch: {os.path.basename(latest_file)}")
@@ -175,18 +162,11 @@ def get_latest_candidate_pt():
 def evaluate_student(iter_num):
     print(f">>> [Iter {iter_num}] EVALUATING (Candidate vs Champion)")
 
-    # --- CHANGED SECTION START ---
-    # 1. Resolve which .pt file to use
     actual_candidate_pt = get_latest_candidate_pt()
 
-    # 2. Export that specific file to ONNX
-    # We overwrite the standard 'candidate_onnx' path so the rest of the script works as is
     export_model(actual_candidate_pt, PATHS["candidate_onnx"])
 
-    # Update our PATHS reference for promotion later (CRITICAL)
-    # If we promote, we want to copy the file we actually used, not the missing 'best.pt'
     PATHS["current_actual_candidate_pt"] = actual_candidate_pt
-    # --- CHANGED SECTION END ---
 
     cmd_candidate = f"{PATHS['engine']} {PATHS['candidate_onnx']}"
     cmd_champion  = f"{PATHS['engine']} {PATHS['best_onnx']}"
@@ -222,11 +202,8 @@ def promote_student(iter_num):
     archive_name = f"champion_iter_{iter_num-1}.pt"
     shutil.copy(PATHS["champion_pt"], f"{PATHS['model_dir']}/archive/{archive_name}")
 
-    # --- CHANGED LINE ---
-    # Copy the ACTUAL file we used (e.g., epoch_2.pt) to become the new champion
     source_pt = PATHS.get("current_actual_candidate_pt", PATHS["candidate_pt"])
     shutil.copy(source_pt, PATHS["champion_pt"])
-    # --------------------
 
     shutil.copy(PATHS["candidate_onnx"], PATHS["best_onnx"])
 
