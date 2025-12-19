@@ -164,9 +164,7 @@ private:
         int winner = pos.getWinner();
 
         if (winner != -1) {
-            int depth = (int)pathIndices.size();
-            float sign = (winner == (1 - pos.sideToMove)) ? 1.0f : -1.0f;
-            value = sign * (200.0f - depth);
+            value = (winner == pos.sideToMove) ? 1.0f : -1.0f;
         } else {
             // Blocking Call to Server
             auto result = server.evaluate(pos);
