@@ -22,7 +22,7 @@
 using namespace engine;
 
 // --- CONFIGURATION ---
-const int OPENING_PLIES = 8;
+const int OPENING_PLIES = 2;
 const int SAFETY_LIMIT = 200;
 
 std::mutex print_mutex;
@@ -331,7 +331,7 @@ GameResult playSingleGame(GtpEngine& blackEngineRef, GtpEngine& whiteEngineRef, 
     {
         std::lock_guard<std::mutex> lock(print_mutex);
         std::cout << "\n--- Start of Game (" << pBlack->getName() << " vs " << pWhite->getName() << ") ---" << std::endl;
-        printHexBoard(pos);
+        // printHexBoard(pos);
     }
 
     int moves = OPENING_PLIES;
@@ -384,10 +384,10 @@ GameResult playSingleGame(GtpEngine& blackEngineRef, GtpEngine& whiteEngineRef, 
             pos.moveCount++;
             moves++;
 
-            {
-                std::lock_guard<std::mutex> lock(print_mutex);
-                std::cout << "Move " << moves << " | SWAP! Engines switched sides." << std::endl;
-            }
+            // {
+            //     std::lock_guard<std::mutex> lock(print_mutex);
+            //     std::cout << "Move " << moves << " | SWAP! Engines switched sides." << std::endl;
+            // }
             continue; // Skip the rest of the loop
         }
         if (moveStr == "resign") {
@@ -410,11 +410,11 @@ GameResult playSingleGame(GtpEngine& blackEngineRef, GtpEngine& whiteEngineRef, 
         pos.makeMove(move);
         moves++;
 
-        {
-            std::lock_guard<std::mutex> lock(print_mutex);
-            std::cout << "\nMove " << moves << " | " << current->getName() << " (" << colorStr << ") played " << moveStr << ":" << std::endl;
-            printHexBoard(pos);
-        }
+        // {
+        //     std::lock_guard<std::mutex> lock(print_mutex);
+        //     std::cout << "\nMove " << moves << " | " << current->getName() << " (" << colorStr << ") played " << moveStr << ":" << std::endl;
+        //     // printHexBoard(pos);
+        // }
 
 
         other->sendCommand("play " + colorStr + " " + moveStr);
@@ -530,6 +530,7 @@ int main(int argc, char** argv) {
     int pairsPerThread = numPairs / numThreads;
     int extra = numPairs % numThreads;
 
+    auto t_start = std::chrono::steady_clock::now();
     for (int i = 0; i < numThreads; ++i) {
         int task = pairsPerThread + (i < extra ? 1 : 0);
         if (task > 0) {
@@ -539,10 +540,17 @@ int main(int argc, char** argv) {
 
     for (auto& t : threads) t.join();
 
+    auto t_end = std::chrono::steady_clock::now();
+    double seconds = std::chrono::duration<double>(t_end - t_start).count();
+
+    std::cout << "Self-play time: " << seconds << " seconds" << std::endl;
+
     std::cout << "----------------------" << std::endl;
     std::cout << "Total Games: " << globalStats.gamesPlayed << std::endl;
     std::cout << "Agent A Wins: " << globalStats.winsA << std::endl;
     std::cout << "Agent B Wins: " << globalStats.winsB << std::endl;
+
+
 
     return 0;
 }

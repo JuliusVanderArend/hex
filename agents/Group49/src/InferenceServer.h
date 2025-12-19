@@ -35,7 +35,7 @@ namespace engine {
         std::thread server_thread;
 
         // Tuning Parameters
-        const size_t MAX_BATCH_SIZE = 128;
+        const size_t MAX_BATCH_SIZE = 512;
         const std::chrono::microseconds BATCH_TIMEOUT = std::chrono::microseconds(100); // 0.1ms
 
     public:

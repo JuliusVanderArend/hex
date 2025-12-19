@@ -191,7 +191,7 @@ void cmd_genmove(std::stringstream& ss, InferenceServer& globalServer) {
 // REPLACE the start of main() in main.cpp with this:
 int main(int argc, char* argv[]) {
     // Default fallback
-    std::string modelPath = "models/best.onnx";
+    std::string modelPath = "/home/skynet/git/hex/agents/Group49/models/best.onnx";
 
     // Accept model path from Arbiter/Command Line
     if (argc > 1) {

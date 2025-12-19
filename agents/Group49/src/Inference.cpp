@@ -16,7 +16,7 @@ class Inference {
     std::array<int64_t, 4> input_shape;
     Ort::Value input_tensor{nullptr};
 
-    const size_t MAX_BATCH = 128; // has to be the same as in InferenceServer
+    const size_t MAX_BATCH = 512; // has to be the same as in InferenceServer
 
     // Fixed Input/Output Names
     const char* input_names[1] = {"state"};

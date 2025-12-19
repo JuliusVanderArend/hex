@@ -5,23 +5,27 @@ import glob
 import re
 import time
 import sys
+import random
 
 # --- CONFIGURATION ---
 ITERATION_START = 1
 ITERATIONS = 100
 
-# Data Generation
-GAMES_PER_ITER = 400
-MCTS_SIMS_GEN = 200
+MODEL_BLOCKS = 10
+MODEL_FILTERS = 256
 
+# Data Generation
+GAMES_PER_ITER = 384
+MCTS_SIMS_GEN = 192
+GOLD_SAMPLE_SIZE = 2048
 # Training
-TRAIN_EPOCHS = 2
+TRAIN_EPOCHS = 3
 WINDOW_SIZE = 15
 
 # Evaluation
-EVAL_GAMES = 40
-EVAL_SIMS = 400
-WIN_THRESHOLD = 0.55
+EVAL_GAMES = 64
+EVAL_SIMS = 192
+WIN_THRESHOLD = 0.52
 
 # --- PATHS SETUP ---
 # 1. Define the relative path from where you RUN the script (3 levels up)
@@ -44,6 +48,7 @@ PATHS = {
     # Directories (Use HEX_NN_ABS)
     "model_dir": os.path.join(HEX_NN_ABS, "models"),
     "data_dir":  os.path.join(HEX_NN_ABS, "data"),
+    "gold_dir":  os.path.join(HEX_NN_ABS, "data/goldstandard"),
 
     # Files (Use HEX_NN_ABS)
     "initial_checkpoint": os.path.join(HEX_NN_ABS, "checkpoints/run_001/best.pt"),
@@ -115,28 +120,98 @@ def generate_data(iter_num):
     ]
     run_command(cmd, log_file=f"logs/gen_{iter_num}.log")
 
+def sample_gold_standard(output_path, num_samples):
+    """
+    Scans PATHS['gold_dir'] for all .jsonl files, filters out junk,
+    and randomly samples 'num_samples' lines into 'output_path'.
+    """
+    print(f"   [Data] Sampling {num_samples} games from Gold Standard corpus...")
+
+    # 1. Find all valid jsonl files
+    all_files = glob.glob(os.path.join(PATHS['gold_dir'], "*.jsonl"))
+
+    # Filter out Zone.Identifier or other metadata junk
+    valid_files = [f for f in all_files if "Zone.Identifier" not in f and os.path.getsize(f) > 0]
+
+    if not valid_files:
+        print("   [Warning] No Gold Standard files found! Training only on self-play.")
+        return
+
+    # 2. Gather lines
+    all_lines = []
+    for fpath in valid_files:
+        try:
+            with open(fpath, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+                # strict check to ensure it looks like json
+                valid_lines = [l for l in lines if l.strip().startswith("{")]
+                all_lines.extend(valid_lines)
+        except Exception as e:
+            print(f"   [Warning] Could not read {os.path.basename(fpath)}: {e}")
+
+    if not all_lines:
+        print("   [Warning] Gold Standard files were empty or invalid.")
+        return
+
+    # 3. Sample
+    sample_count = min(len(all_lines), num_samples)
+    selected_lines = random.sample(all_lines, sample_count)
+
+    # 4. Write to temp file
+    with open(output_path, 'w', encoding='utf-8') as f:
+        f.writelines(selected_lines)
+
+    print(f"   [Data] Successfully mixed in {len(selected_lines)} expert games.")
+
 def train_student(iter_num):
     print(f">>> [Iter {iter_num}] TRAINING STUDENT (Fine-Tuning)")
 
-    # 1. Select Replay Buffer (Last N valid files)
-    all_files = sorted(glob.glob(f"{PATHS['data_dir']}/*.jsonl"))
+    # 1. Identify Self-Play History (Last N valid files)
+    all_files = sorted(glob.glob(f"{PATHS['data_dir']}/gen_*.jsonl"))
     valid_files = [f for f in all_files if os.path.getsize(f) > 0]
-    train_files = valid_files[-WINDOW_SIZE:]
+    replay_files = valid_files[-WINDOW_SIZE:]
 
-    if not train_files:
-        raise Exception("No valid training data found!")
+    if not replay_files:
+        raise Exception("No valid self-play data found!")
 
-    print(f"   Training on {len(train_files)} files.")
+    # --- DYNAMIC SAMPLING LOGIC START ---
+    # Calculate how many self-play games we actually have
+    # (Assuming roughly GAMES_PER_ITER games per file)
+    current_self_play_count = len(replay_files) * GAMES_PER_ITER
 
-    # 2. Run train.py
+    # Target a 1:1 ratio, but cap it at our maximum desired gold size (e.g., 3000)
+    MAX_GOLD_SIZE = 6000
+    dynamic_gold_count = int(min(current_self_play_count * 1, MAX_GOLD_SIZE))
+
+    print(f"   [Data Balance] Self-Play: ~{current_self_play_count} | Gold Standard: {dynamic_gold_count}")
+    # --- DYNAMIC SAMPLING LOGIC END ---
+
+    # 2. Generate Gold Standard Subset
+    gold_subset_file = os.path.join(PATHS['data_dir'], "temp_gold_subset.jsonl")
+
+    # Pass the calculated number, not the global constant
+    sample_gold_standard(gold_subset_file, dynamic_gold_count)
+
+    # 3. Combine Lists (Replay + Gold Subset)
+    # Only add gold file if it was actually created and has content
+    training_data_args = list(replay_files)
+    if os.path.exists(gold_subset_file) and os.path.getsize(gold_subset_file) > 0:
+        training_data_args.append(gold_subset_file)
+
+    print(f"   Training sources: {len(replay_files)} self-play files + Gold Subset")
+
+    # 4. Run train.py
     cmd = [
               "python3", PATHS["train"],
-              "--data"] + train_files + [
+              "--data"] + training_data_args + [
               "--epochs", str(TRAIN_EPOCHS),
               "--resume", PATHS["champion_pt"],
               "--run-name", "candidate",
               "--output-dir", PATHS["model_dir"],
-              "--lr", "0.0001"
+              "--lr", "0.00005",
+            "--weight-decay", "0.01",
+            "--num-blocks", str(MODEL_BLOCKS),
+            "--channels", str(MODEL_FILTERS)
           ]
 
     run_command(cmd)
@@ -145,7 +220,9 @@ def export_model(pt_path, onnx_path):
     cmd = [
         "python3", PATHS["export"],
         pt_path,
-        onnx_path
+        onnx_path,
+        "--blocks", str(MODEL_BLOCKS),
+        "--filters", str(MODEL_FILTERS)
     ]
     run_command(cmd)
 
@@ -196,7 +273,7 @@ def evaluate_student(iter_num):
         cmd_candidate,
         cmd_champion,
         str(EVAL_GAMES // 2),
-        "6",
+        "16", # THREAD COUNT
         str(EVAL_SIMS)
     ]
     print(cmd)
@@ -216,23 +293,46 @@ def evaluate_student(iter_num):
 
     return win_rate >= WIN_THRESHOLD
 
+def copy_onnx(src_path, dst_path):
+    """
+    Copies an ONNX file AND its .data file (if it exists).
+    Also cleans up stale .data files at the destination.
+    """
+    # 1. Copy the main .onnx file
+    shutil.copy(src_path, dst_path)
+
+    # 2. Handle the .data file
+    src_data = src_path + ".data"
+    dst_data = dst_path + ".data"
+
+    if os.path.exists(src_data):
+        # If source has data, copy it
+        print(f"   [IO] Copying external data: {os.path.basename(src_data)}")
+        shutil.copy(src_data, dst_data)
+    elif os.path.exists(dst_data):
+        # If source has NO data, but destination DOES (from a previous big model),
+        # delete the stale destination data to avoid 'file mismatch' errors.
+        print(f"   [IO] Cleaning up stale data file: {os.path.basename(dst_data)}")
+        os.remove(dst_data)
+
 def promote_student(iter_num):
     print(f">>> PROMOTING CANDIDATE TO CHAMPION")
 
     archive_name = f"champion_iter_{iter_num-1}.pt"
     shutil.copy(PATHS["champion_pt"], f"{PATHS['model_dir']}/archive/{archive_name}")
 
-    # --- CHANGED LINE ---
-    # Copy the ACTUAL file we used (e.g., epoch_2.pt) to become the new champion
+    # 1. Promote Weights (PT)
     source_pt = PATHS.get("current_actual_candidate_pt", PATHS["candidate_pt"])
     shutil.copy(source_pt, PATHS["champion_pt"])
-    # --------------------
 
-    shutil.copy(PATHS["candidate_onnx"], PATHS["best_onnx"])
+    # 2. Promote Engine (ONNX + Data) --- CHANGED ---
+    copy_onnx(PATHS["candidate_onnx"], PATHS["best_onnx"])
+    # -----------------------------------------------
 
     print(f"   Champion updated. Old champion archived to {archive_name}")
 
 def main():
+    global MCTS_SIMS_GEN, EVAL_SIMS
     try:
         initialize_workspace()
     except Exception as e:
@@ -244,6 +344,8 @@ def main():
         print(f"\n{'='*60}\nSTARTING ITERATION {i}\n{'='*60}")
 
         try:
+            MCTS_SIMS_GEN = 160 + (i * 32)
+            EVAL_SIMS     = 160 + (i * 32)
             generate_data(i)
             train_student(i)
 

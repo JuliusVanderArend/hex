@@ -685,7 +685,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    unsigned int nThreads = 4;
+    unsigned int nThreads = 8;
 
     // if (mode == Mode::AGENT) nThreads = 6;
 
