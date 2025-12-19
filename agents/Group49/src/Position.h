@@ -70,6 +70,9 @@ namespace engine {
         Board getBoardBits(int player) const { return boards[player]; }
         Board getOccupancyBits() const { return occupancy; }
 
+        // Load board from snapshot (used by external engines / wrappers)
+        void loadFromSnapshot(const std::vector<std::string>& rows);
+
         int sideToMove = 0;
 
         int moveCount = 0;

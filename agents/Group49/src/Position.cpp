@@ -261,6 +261,75 @@ void Position::makeRandomRolloutMove(FastRand& rng) {
         return -1;
     }
 
+    void Position::loadFromSnapshot(const std::vector<std::string>& rows) {
+    // 1. Reset everything
+    boards[0] = 0;
+    boards[1] = 0;
+    occupancy = 0;
+    moveCount = 0;
+    lastMove = -1;
+
+    dsus[0].reset();
+    dsus[1].reset();
+
+    // 2. Fill boards + occupancy
+    for (int y = 0; y < BOARD_SIZE; y++) {
+        for (int x = 0; x < BOARD_SIZE; x++) {
+            char c = rows[y][x];
+            int idx = y * BOARD_SIZE + x;
+
+            if (c == 'R') {
+                boards[0] |= ((Board)1 << idx);
+                occupancy |= ((Board)1 << idx);
+                moveCount++;
+            }
+            else if (c == 'B') {
+                int t = x * BOARD_SIZE + y; // transpose
+                boards[1] |= ((Board)1 << t);
+                occupancy |= ((Board)1 << idx);
+                moveCount++;
+            }
+        }
+    }
+
+    // 3. Rebuild DSU
+    static const int dr[6] = {-1, -1, 0, 0, 1, 1};
+    static const int dc[6] = {0, 1, -1, 1, -1, 0};
+
+    for (int player = 0; player < 2; player++) {
+        for (int i = 0; i < BOARD_AREA; i++) {
+            if (!((boards[player] >> i) & 1)) continue;
+
+            int r = i / BOARD_SIZE;
+            int c = i % BOARD_SIZE;
+
+            for (int d = 0; d < 6; d++) {
+                int nr = r + dr[d];
+                int nc = c + dc[d];
+                if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE)
+                    continue;
+
+                int ni = nr * BOARD_SIZE + nc;
+                if ((boards[player] >> ni) & 1) {
+                    dsus[player].unite(i, ni);
+                }
+            }
+
+            // Virtual edges
+            if (player == 0) { // Red
+                if (r == 0) dsus[0].unite(i, 121);
+                if (r == BOARD_SIZE - 1) dsus[0].unite(i, 122);
+            } else { // Blue
+                if (c == 0) dsus[1].unite(i, 121);
+                if (c == BOARD_SIZE - 1) dsus[1].unite(i, 122);
+            }
+        }
+    }
+
+    // 4. Side to move
+    sideToMove = (moveCount % 2 == 0) ? 0 : 1;
+}
+
 
     void Position::toTensor(float* dst) const {
         constexpr int PLANE_SIZE = 121;
