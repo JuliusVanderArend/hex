@@ -3,6 +3,22 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# macOS
+.DS_Store
+
+# Build directories
+macos-build/
+macos-buil/
+build-macos/
+
+# ONNX models (large binary files)
+*.onnx
+*.onnx.data
+
+# Game data and logs
+*.jsonl
+*.sgf
+
 # JetBrains IDE / CLion
 .idea/
 *.iml

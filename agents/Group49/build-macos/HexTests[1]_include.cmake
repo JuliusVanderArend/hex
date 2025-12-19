@@ -1,5 +1,0 @@
-if(EXISTS "/Users/serhiitupikin/Documents/Coding/University/hex/agents/Group49/build-macos/HexTests[1]_tests.cmake")
-  include("/Users/serhiitupikin/Documents/Coding/University/hex/agents/Group49/build-macos/HexTests[1]_tests.cmake")
-else()
-  add_test(HexTests_NOT_BUILT HexTests_NOT_BUILT)
-endif()

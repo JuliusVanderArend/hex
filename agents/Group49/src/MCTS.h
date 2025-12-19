@@ -218,7 +218,7 @@ private:
         // Caller must hold node->mutex
         std::vector<int> legal = pos.getLegalMoves();
 
-        static constexpr int TOP_K = 24;
+        static constexpr int TOP_K = 40;
         static constexpr float MIN_P = 1e-6f;
 
         // 1. Rank legal moves by policy probability

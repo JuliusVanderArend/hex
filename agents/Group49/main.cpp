@@ -236,6 +236,9 @@ int main(int argc, char* argv[]) {
             engineRunning = false;
             gtpResponse("");
         }
+        else if (command == "hexgui-analyze_commands") {
+            gtpResponse("");  // No analyze commands available
+        }
         else {
             gtpResponse("unknown command", false);
         }

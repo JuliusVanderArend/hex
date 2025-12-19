@@ -40,7 +40,8 @@ std::mutex io_mutex;
 enum class Mode {
     MOHEX,
     AGENT,
-    AGENT_VS_MOHEX
+    AGENT_VS_MOHEX,
+    AGENT_VS_AGENT
 };
 
 struct Sample {
@@ -526,17 +527,109 @@ GameSamples playAgentVsMohexGame(
     return record;
 }
 
+// --- GAME LOOP: AGENT VS AGENT (two different models) ---
+GameSamples playAgentVsAgentGame(
+    MCTS& agent1,
+    InferenceServer& server1,
+    MCTS& agent2,
+    InferenceServer& server2,
+    int simulations
+) {
+    Position pos(0);
+    GameSamples record;
+
+    size_t seed = std::hash<std::thread::id>{}(std::this_thread::get_id())
+                  + std::chrono::high_resolution_clock::now().time_since_epoch().count();
+    FastRand rng(seed);
+
+    int movesPlayed = 0;
+
+    while (pos.getWinner() == -1) {
+        // Agent1 plays Black (sideToMove == 0), Agent2 plays White (sideToMove == 1)
+        bool isAgent1Turn = (pos.sideToMove == 0);
+
+        MCTS& currentAgent = isAgent1Turn ? agent1 : agent2;
+        InferenceServer& currentServer = isAgent1Turn ? server1 : server2;
+
+        SearchResult result = currentAgent.searchWithPolicy(pos, currentServer, simulations);
+
+        // Handle swap rule for Agent2 (White) on move 1
+        if (pos.moveCount == 1 && !isAgent1Turn) {
+            if (result.rootValue < 0.0f) {
+                record.moveHistory.push_back("swap");
+                pos.moveCount++;
+                movesPlayed++;
+                continue;
+            }
+        }
+
+        double temp = (movesPlayed < TEMP_THRESHOLD) ? 1.0 : 0.0;
+        int bestMove = pickMoveFromPolicy(result.policy, temp, rng);
+
+        if (bestMove < 0) break;
+
+        // Record sample
+        Sample sample;
+        sample.playerToMove = pos.sideToMove;
+        std::vector<float> tensor = pos.toTensor();
+        sample.red        = extractPlane(tensor, 0);
+        sample.blue       = extractPlane(tensor, 1);
+        sample.turn       = extractPlane(tensor, 2);
+        sample.last_move  = extractPlane(tensor, 3);
+        sample.conn_start = extractPlane(tensor, 4);
+        sample.conn_end   = extractPlane(tensor, 5);
+        sample.policy = result.policy;
+        sample.rootValue = result.rootValue;
+        record.samples.push_back(sample);
+
+        record.moveHistory.push_back(moveToString(bestMove));
+        pos.makeMove(bestMove);
+        movesPlayed++;
+    }
+
+    if (record.winner == -1) record.winner = pos.getWinner();
+    if (record.winner == -1) record.winner = 2;
+
+    // Update sample values based on outcome
+    for (auto& s : record.samples) {
+        s.rootValue = (record.winner == 2) ? 0.0f
+                    : (record.winner == s.playerToMove ? 1.0f : -1.0f);
+    }
+
+    std::cout << "Agent1 vs Agent2 | Winner=" << record.winner
+              << " (" << (record.winner == 0 ? "Agent1/Black" : "Agent2/White") << ")" << std::endl;
+
+    return record;
+}
+
 // --- WORKER THREAD ---
-void worker(Mode mode, int totalGames, int simulations, bool saveSGF, std::atomic<int>& gamesPlayed, std::ofstream& out, const std::string& modelPath) {
+void worker(Mode mode, int totalGames, int simulations, bool saveSGF, std::atomic<int>& gamesPlayed, std::ofstream& out, const std::string& modelPath, const std::string& modelPath2 = "") {
     std::unique_ptr<Inference> net;
     std::unique_ptr<InferenceServer> server;
     std::unique_ptr<MCTS> mcts_agent;
+
+    // Second model for AGENT_VS_AGENT mode
+    std::unique_ptr<Inference> net2;
+    std::unique_ptr<InferenceServer> server2;
+    std::unique_ptr<MCTS> mcts_agent2;
 
     if (mode == Mode::AGENT || mode == Mode::AGENT_VS_MOHEX) {
         net = std::make_unique<Inference>(modelPath);
         server = std::make_unique<InferenceServer>(*net);
         mcts_agent = std::make_unique<MCTS>();
         mcts_agent->cpuct = 1.5;
+    }
+
+    if (mode == Mode::AGENT_VS_AGENT) {
+        net = std::make_unique<Inference>(modelPath);
+        server = std::make_unique<InferenceServer>(*net);
+        mcts_agent = std::make_unique<MCTS>();
+        mcts_agent->cpuct = 1.5;
+
+        net2 = std::make_unique<Inference>(modelPath2);
+        server2 = std::make_unique<InferenceServer>(*net2);
+        mcts_agent2 = std::make_unique<MCTS>();
+        mcts_agent2->cpuct = 1.5;
     }
 
     while (true) {
@@ -553,6 +646,8 @@ void worker(Mode mode, int totalGames, int simulations, bool saveSGF, std::atomi
                 GtpEngine engine(MOHEX_PATH, MOHEX_CONFIG);
                 bool agentPlaysBlack = (gameIdx % 2 == 0);  // Alternate colors each game
                 record = playAgentVsMohexGame(*mcts_agent, *server, engine, simulations, agentPlaysBlack);
+            } else if (mode == Mode::AGENT_VS_AGENT) {
+                record = playAgentVsAgentGame(*mcts_agent, *server, *mcts_agent2, *server2, simulations);
             } else {
                 record = playAgentGame(*mcts_agent, *server, simulations);
             }
@@ -568,6 +663,8 @@ void worker(Mode mode, int totalGames, int simulations, bool saveSGF, std::atomi
                     bool agentPlaysBlack = (gameIdx % 2 == 0);
                     bName = agentPlaysBlack ? "Agent" : "MoHex";
                     wName = agentPlaysBlack ? "MoHex" : "Agent";
+                } else if (mode == Mode::AGENT_VS_AGENT) {
+                    bName = "Agent1"; wName = "Agent2";
                 } else {
                     bName = "Agent"; wName = "Agent";
                 }
@@ -600,6 +697,7 @@ void worker(Mode mode, int totalGames, int simulations, bool saveSGF, std::atomi
             if ((gameIdx + 1) % 1 == 0) {
                 const char* modeName = (mode == Mode::MOHEX) ? "MoHex"
                                      : (mode == Mode::AGENT_VS_MOHEX) ? "AgentVsMoHex"
+                                     : (mode == Mode::AGENT_VS_AGENT) ? "AgentVsAgent"
                                      : "Agent";
                 std::cout << "Finished " << modeName
                           << " game " << gameIdx + 1 << "/" << totalGames
@@ -618,7 +716,7 @@ int main(int argc, char** argv) {
     std::signal(SIGPIPE, SIG_IGN);
 
     if (argc < 2) {
-        std::cerr << "Usage: ./SelfPlay <mode: mohex|agent|agent_vs_mohex> [games] [sims/file] [output_file] [save_sgf 0|1] [model_path]" << std::endl;
+        std::cerr << "Usage: ./SelfPlay <mode: mohex|agent|agent_vs_mohex|agent_vs_agent> [games] [sims] [output_file] [save_sgf 0|1] [model_path] [model_path2]" << std::endl;
         return 1;
     }
 
@@ -626,13 +724,15 @@ int main(int argc, char** argv) {
     Mode mode;
     if (modeStr == "agent") mode = Mode::AGENT;
     else if (modeStr == "agent_vs_mohex") mode = Mode::AGENT_VS_MOHEX;
+    else if (modeStr == "agent_vs_agent") mode = Mode::AGENT_VS_AGENT;
     else mode = Mode::MOHEX;
 
     int games = (argc > 2) ? std::stoi(argv[2]) : 10;
     int simulations = 512;
-    bool usesAgent = (mode == Mode::AGENT || mode == Mode::AGENT_VS_MOHEX);
+    bool usesAgent = (mode == Mode::AGENT || mode == Mode::AGENT_VS_MOHEX || mode == Mode::AGENT_VS_AGENT);
     std::string outputPath = usesAgent ? "agent_data.jsonl" : "mohex_data.jsonl";
     if (mode == Mode::AGENT_VS_MOHEX) outputPath = "agent_vs_mohex_data.jsonl";
+    if (mode == Mode::AGENT_VS_AGENT) outputPath = "agent_vs_agent_data.jsonl";
     bool saveSGF = false;
 
     if (argc > 3) {
@@ -647,8 +747,12 @@ int main(int argc, char** argv) {
         saveSGF = (std::stoi(argv[5]) != 0);
     }
     std::string modelPath = "models/hex_run_6.onnx"; // Default
+    std::string modelPath2 = "";
     if (usesAgent && argc > 6) {
         modelPath = argv[6]; // Allow overriding model path
+    }
+    if (mode == Mode::AGENT_VS_AGENT && argc > 7) {
+        modelPath2 = argv[7]; // Second model for agent_vs_agent
     }
 
     std::ofstream out(outputPath, std::ios::out | std::ios::trunc);
@@ -658,16 +762,20 @@ int main(int argc, char** argv) {
     }
 
     unsigned int nThreads = 10;
-    // if (mode == Mode::AGENT) nThreads = 6;
+    if (mode == Mode::AGENT_VS_AGENT) nThreads = 2;  // Fewer threads since each loads 2 models
 
     const char* modeNameLog = (mode == Mode::MOHEX) ? "MOHEX"
                              : (mode == Mode::AGENT_VS_MOHEX) ? "AGENT_VS_MOHEX"
+                             : (mode == Mode::AGENT_VS_AGENT) ? "AGENT_VS_AGENT"
                              : "AGENT";
     std::cout << "Starting Self-Play | Mode: " << modeNameLog << std::endl;
     std::cout << "Games: " << games << " | Threads: " << nThreads << " | SGF Logging: " << (saveSGF ? "ON" : "OFF") << std::endl;
     if (usesAgent) {
         std::cout << "MCTS Simulations: " << simulations << std::endl;
-        std::cout << "Model Path: " << modelPath << std::endl;
+        std::cout << "Model 1 Path: " << modelPath << std::endl;
+        if (mode == Mode::AGENT_VS_AGENT) {
+            std::cout << "Model 2 Path: " << modelPath2 << std::endl;
+        }
     }
 
     std::vector<std::thread> threads;
@@ -676,7 +784,7 @@ int main(int argc, char** argv) {
 	auto t_start = std::chrono::steady_clock::now();
 
     for (unsigned int i = 0; i < nThreads; ++i) {
-        threads.emplace_back(worker, mode, games, simulations, saveSGF, std::ref(gamesPlayed), std::ref(out),modelPath);
+        threads.emplace_back(worker, mode, games, simulations, saveSGF, std::ref(gamesPlayed), std::ref(out), modelPath, modelPath2);
     }
 
     for (auto& t : threads) {

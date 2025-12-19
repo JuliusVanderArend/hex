@@ -1,1 +1,0 @@
-/usr/bin/c++ -O3 -DNDEBUG -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/Arbiter.dir/arbiter.cpp.o CMakeFiles/Arbiter.dir/src/Position.cpp.o CMakeFiles/Arbiter.dir/src/Util.cpp.o -o Arbiter   -L/opt/homebrew/opt/onnxruntime/lib
