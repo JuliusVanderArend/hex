@@ -37,7 +37,7 @@ class CppAgentWrapper(AgentBase):
         self.agent_process = Popen(
             [
                 "./agents/Group49/cpp_agent",
-                colour.get_char(),  # "R" or "B"
+                colour.get_char(colour),  # "R" or "B"
                 "11",
             ],
             stdin=PIPE,
@@ -60,7 +60,7 @@ class CppAgentWrapper(AgentBase):
                 if tile.colour is None:
                     s += "0"
                 else:
-                    s += tile.colour.get_char()
+                    s += tile.colour.get_char(tile.colour)
             board_strings.append(s)
 
         board_string = ",".join(board_strings)

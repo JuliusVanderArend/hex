@@ -10,7 +10,7 @@
 using namespace std;
 using namespace engine;
 
-static constexpr int SEARCH_ITERATIONS = 30000;
+static constexpr int SEARCH_ITERATIONS = 150000;
 
 vector<string> split(const string& s, char delim) {
     vector<string> elems;
