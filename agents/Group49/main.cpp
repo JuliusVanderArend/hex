@@ -10,7 +10,7 @@
 using namespace std;
 using namespace engine;
 
-static constexpr int SEARCH_ITERATIONS = 100000;
+static constexpr int SEARCH_ITERATIONS = 150000;
 
 vector<string> split(const string& s, char delim) {
     vector<string> elems;
@@ -35,7 +35,7 @@ int main(int argc, char* argv[]) {
     MCTS mcts;
 
     Position pos(myColour == "R" ? 0 : 1);
-
+	bool swapAllowed = true;
     const int OPENING_X = 0;
     const int OPENING_Y = 1;
     const float SWAP_THRESHOLD = -0.05f;
@@ -60,7 +60,7 @@ int main(int argc, char* argv[]) {
             pos.makeMove(y * BOARD_SIZE + x);
         }
         else if (command == "SWAP") {
-            pos.sideToMove ^= 1;
+			swapAllowed = false;
         }
 
         int bestMove = -1;
@@ -72,7 +72,7 @@ int main(int argc, char* argv[]) {
         else if (pos.moveCount == 1) {
             SearchResult result = mcts.searchWithPolicy(pos, server, SEARCH_ITERATIONS);
 
-            if (result.rootValue < SWAP_THRESHOLD) {
+            if (swapAllowed && result.rootValue < SWAP_THRESHOLD) {
                 doSwap = true;
             } else {
                 bestMove = result.bestMove;
@@ -84,9 +84,8 @@ int main(int argc, char* argv[]) {
         }
 
         if (doSwap) {
-            cout << "SWAP" << "\n";
+            cout << "-1,-1" << "\n";
             cout.flush();
-            pos.sideToMove ^= 1;
         } else {
             pos.makeMove(bestMove);
             int x = bestMove % BOARD_SIZE;
