@@ -16,7 +16,7 @@ namespace engine {
     using Move = uint_fast8_t;
 
     constexpr int BOARD_SIZE = 11;
-    constexpr int BOARD_AREA = BOARD_SIZE * BOARD_SIZE; /
+    constexpr int BOARD_AREA = BOARD_SIZE * BOARD_SIZE;
     constexpr int MAX_MOVES  = BOARD_AREA;
 
     const std::string MODEL_PATH = "models/best.onnx";
